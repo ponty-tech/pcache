@@ -26,3 +26,29 @@ thiserror = "2"
 
 # Logging
 tracing = "0.1"
+
+# Workspace-wide lints to catch performance issues
+[workspace.lints.clippy]
+# Catch unnecessary clones
+clone_on_ref_ptr = "warn"
+redundant_clone = "warn"
+clone_on_copy = "warn"
+
+# Catch inefficient String usage
+str_to_string = "warn"
+string_add = "warn"
+string_add_assign = "warn"
+
+# Catch unnecessary allocations
+unnecessary_to_owned = "warn"
+implicit_clone = "warn"
+
+# Performance lints
+large_enum_variant = "warn"
+large_types_passed_by_value = "warn"
+needless_pass_by_value = "warn"
+trivially_copy_pass_by_ref = "warn"
+
+# General best practices
+manual_string_new = "warn"
+inefficient_to_string = "warn"

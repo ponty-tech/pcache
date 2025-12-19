@@ -1,0 +1,23 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "checkOnSave": true,
+        "check": {
+          "command": "clippy",
+          "extraArgs": ["--", "-D", "warnings"],
+        },
+        "cargo": {
+          "allFeatures": true,
+          "allTargets": true,
+        },
+        "procMacro": {
+          "enable": true,
+        },
+        "diagnostics": {
+          "enable": true,
+        },
+      },
+    },
+  },
+}
