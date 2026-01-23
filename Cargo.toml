@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Three-layer caching library (L1: moka, L2: Redis, L3: pluggable backend)"
 license = "MIT"
+repository = "https://github.com/ponty-tech/pcache"
 
 [dependencies]
 # Async runtime
