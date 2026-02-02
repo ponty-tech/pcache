@@ -1,6 +1,6 @@
 [package]
 name = "pcache"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Three-layer caching library (L1: moka, L2: Redis, L3: pluggable backend)"
 license = "MIT"
@@ -16,7 +16,7 @@ futures = "0.3"
 moka = { version = "0.12", features = ["future"] }
 
 # L2 cache (Redis)
-redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1", features = ["tokio-comp", "connection-manager"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
