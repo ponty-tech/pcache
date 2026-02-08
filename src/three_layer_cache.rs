@@ -123,8 +123,8 @@ impl PubSubHub {
                                                         attempt, channel, e
                                                     );
                                                     if attempt == max_attempts {
-                                                        error!(
-                                                            "PubSubHub: giving up subscribing to channel {} after {} attempts",
+                                                        warn!(
+                                                            "PubSubHub: initial subscribe failed for channel {} after {} attempts, will retry during health check",
                                                             channel, max_attempts
                                                         );
                                                         break;
@@ -144,71 +144,76 @@ impl PubSubHub {
                             // Periodic health check & automatic re-subscribe
                             if last_health_check.elapsed() >= health_interval {
                                 last_health_check = Instant::now();
-                                match redis::aio::ConnectionManager::new(redis_client.clone()).await
-                                {
-                                    Ok(mut conn) => {
-                                        match redis::cmd("PING")
-                                            .query_async::<String>(&mut conn)
-                                            .await
-                                        {
-                                            Ok(_) => {
-                                                // Connection healthy
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "PubSubHub: PING failed ({}); attempting reconnection",
-                                                    e
-                                                );
-                                                match redis_client.get_async_pubsub().await {
-                                                    Ok(new_pubsub) => {
-                                                        pubsub = new_pubsub;
-                                                        for ch in subscribed.iter() {
-                                                            let mut attempt = 0u32;
-                                                            let mut delay_ms = 100u64;
-                                                            while attempt < 5 {
-                                                                match pubsub.subscribe(ch).await {
-                                                                    Ok(()) => {
-                                                                        debug!(
-                                                                            "PubSubHub: re-subscribed channel {}",
-                                                                            ch
-                                                                        );
-                                                                        break;
-                                                                    }
-                                                                    Err(e2) => {
-                                                                        attempt += 1;
-                                                                        warn!(
-                                                                            "PubSubHub: re-subscribe attempt {} failed for {}: {}",
-                                                                            attempt, ch, e2
-                                                                        );
-                                                                        tokio::time::sleep(
-                                                                            Duration::from_millis(
-                                                                                delay_ms,
-                                                                            ),
-                                                                        )
-                                                                        .await;
-                                                                        delay_ms = (delay_ms
-                                                                            .saturating_mul(2))
-                                                                        .min(2000);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e2) => {
-                                                        error!(
-                                                            "PubSubHub: reconnection failed: {}",
-                                                            e2
-                                                        );
-                                                    }
+
+                                let needs_reconnect =
+                                    match redis::aio::ConnectionManager::new(redis_client.clone())
+                                        .await
+                                    {
+                                        Ok(mut conn) => {
+                                            match redis::cmd("PING")
+                                                .query_async::<String>(&mut conn)
+                                                .await
+                                            {
+                                                Ok(_) => false,
+                                                Err(e) => {
+                                                    warn!(
+                                                        "PubSubHub: PING failed ({}); attempting reconnection",
+                                                        e
+                                                    );
+                                                    true
                                                 }
                                             }
                                         }
+                                        Err(e) => {
+                                            warn!(
+                                                "PubSubHub: could not create connection manager for health check: {}",
+                                                e
+                                            );
+                                            true
+                                        }
+                                    };
+
+                                if needs_reconnect {
+                                    match redis_client.get_async_pubsub().await {
+                                        Ok(new_pubsub) => {
+                                            pubsub = new_pubsub;
+                                            // New connection has no subscriptions; clear so
+                                            // they're re-established by the loop below.
+                                            subscribed.clear();
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "PubSubHub: reconnection failed: {}",
+                                                e
+                                            );
+                                        }
                                     }
-                                    Err(e) => {
-                                        warn!(
-                                            "PubSubHub: could not create connection manager for health check: {}",
-                                            e
-                                        );
+                                }
+
+                                // Subscribe any channels that have callbacks but aren't
+                                // subscribed. Handles both initial subscription failures
+                                // and post-reconnection recovery.
+                                let pending: Vec<&'static str> = callbacks
+                                    .keys()
+                                    .filter(|ch| !subscribed.contains(*ch))
+                                    .copied()
+                                    .collect();
+
+                                for channel in pending {
+                                    match pubsub.subscribe(channel).await {
+                                        Ok(()) => {
+                                            debug!(
+                                                "PubSubHub: subscribed to channel {}",
+                                                channel
+                                            );
+                                            subscribed.insert(channel);
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                "PubSubHub: health check failed to subscribe to {}: {}",
+                                                channel, e
+                                            );
+                                        }
                                     }
                                 }
                             }
