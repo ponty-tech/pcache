@@ -1,4 +1,4 @@
-from pypcache._pypcache import (
+from pcache.pcache import (
     CacheConfig,
     SystemFunctionCache,
     SystemFunctions,
