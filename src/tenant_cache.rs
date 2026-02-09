@@ -133,13 +133,11 @@ impl KeyFormatter<String> for TenantByIdKeyFormatter {
     }
 
     fn invalidation_channel(&self) -> &'static str {
-        "cache:invalidate:tenant"
+        "cache:invalidate:tenant:id"
     }
 
     fn parse_invalidation_payload(&self, payload: &str) -> Option<String> {
-        // Payload can be "tenant_id" or "tenant_id:slug"
-        // Extract tenant_id (first part)
-        Some(payload.split(':').next().unwrap_or(payload).to_owned())
+        Some(payload.to_owned())
     }
 }
 
@@ -152,20 +150,11 @@ impl KeyFormatter<String> for TenantBySlugKeyFormatter {
     }
 
     fn invalidation_channel(&self) -> &'static str {
-        "cache:invalidate:tenant"
+        "cache:invalidate:tenant:slug"
     }
 
     fn parse_invalidation_payload(&self, payload: &str) -> Option<String> {
-        // Payload can be "tenant_id" or "tenant_id:slug"
-        // Extract slug (second part) if present
-        let parts: Vec<&str> = payload.split(':').collect();
-        if parts.len() >= 2 {
-            Some(parts[1].to_owned())
-        } else {
-            // If only tenant_id provided, we can't invalidate by slug directly
-            // The cache will expire naturally via TTL
-            None
-        }
+        Some(payload.to_owned())
     }
 }
 
