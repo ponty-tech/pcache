@@ -1,10 +1,14 @@
 [package]
 name = "pcache"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Three-layer caching library (L1: moka, L2: Redis, L3: pluggable backend)"
 license = "MIT"
 repository = "https://github.com/ponty-tech/pcache"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "pcache"
 
 [dependencies]
 # Async runtime
@@ -27,6 +31,21 @@ thiserror = "2"
 
 # Logging
 tracing = "0.1"
+
+# Python bindings (optional)
+[dependencies.pyo3]
+version = "0.27"
+features = ["extension-module"]
+optional = true
+
+[dependencies.pyo3-async-runtimes]
+version = "0.27"
+features = ["tokio-runtime"]
+optional = true
+
+[features]
+default = []
+python = ["pyo3", "pyo3-async-runtimes"]
 
 # Workspace-wide lints to catch performance issues
 [workspace.lints.clippy]

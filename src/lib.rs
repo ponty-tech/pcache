@@ -14,11 +14,15 @@
 
 mod config;
 mod error;
+#[cfg(feature = "python")]
+mod python;
+pub mod system_function_cache;
 pub mod tenant_cache;
 mod three_layer_cache;
 
 pub use config::CacheConfig;
 pub use error::CacheError;
+pub use system_function_cache::{SystemFunctionBackend, SystemFunctionCache, SystemFunctions};
 pub use tenant_cache::{TenantBackend, TenantCache, TenantInfo};
 pub use three_layer_cache::{
     CacheKey, Cacheable, DataFetcher, KeyFormatter, ThreeLayerCache, shutdown_pubsub_hub,
@@ -26,3 +30,13 @@ pub use three_layer_cache::{
 
 // Re-export async_trait for convenience
 pub use async_trait::async_trait;
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+#[cfg(feature = "python")]
+#[pymodule]
+fn _pypcache(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    python::register(m)?;
+    Ok(())
+}
