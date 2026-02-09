@@ -6,10 +6,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyType};
 use pyo3_async_runtimes::tokio::future_into_py;
 
+use crate::collection_cache::CollectionBackend;
 use crate::system_function_cache::SystemFunctionBackend;
 use crate::tenant_cache::TenantBackend;
 use crate::{
-    CacheConfig, SystemFunctionCache, SystemFunctions, TenantCache, TenantInfo,
+    CacheConfig, CollectionCache, SystemFunctionCache, SystemFunctions, TenantCache, TenantInfo,
     shutdown_pubsub_hub,
 };
 
@@ -232,6 +233,44 @@ async fn call_python_async(
     })
     .await
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+}
+
+/// Run a Python async method that takes no arguments from a tokio context.
+///
+/// Like `call_python_async` but for zero-argument methods (e.g., `fetch_all()`).
+async fn call_python_async_no_args(
+    py_obj: Py<PyAny>,
+    method: &str,
+    event_loop: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let method = method.to_owned();
+
+    tokio::task::spawn_blocking(move || {
+        Python::attach(|py| {
+            let coro = py_obj.call_method0(py, method.as_str())?;
+            let asyncio = py.import("asyncio")?;
+            let cf = asyncio.call_method1(
+                "run_coroutine_threadsafe",
+                (coro.bind(py), event_loop.bind(py)),
+            )?;
+            cf.call_method1("result", (30.0,))
+                .map(|r| r.unbind())
+        })
+    })
+    .await
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+}
+
+/// Convert a Python object (dict, list, None, etc.) to serde_json::Value
+fn py_to_json_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<serde_json::Value>> {
+    if obj.is_none() {
+        return Ok(None);
+    }
+    let json_mod = py.import("json")?;
+    let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&json_str)
+        .map(Some)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 #[async_trait::async_trait]
@@ -494,6 +533,119 @@ impl PySystemFunctionCache {
     }
 }
 
+/// Wraps a Python object that implements the CollectionBackend protocol:
+///   async def fetch_all(self) -> Any | None
+struct PyCollectionBackendWrapper {
+    py_backend: Py<PyAny>,
+    event_loop: Py<PyAny>,
+}
+
+#[async_trait::async_trait]
+impl CollectionBackend for PyCollectionBackendWrapper {
+    type Value = serde_json::Value;
+
+    async fn fetch_all(
+        &self,
+    ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+        let (backend, event_loop) = Python::attach(|py| {
+            (
+                self.py_backend.clone_ref(py),
+                self.event_loop.clone_ref(py),
+            )
+        });
+        let result = call_python_async_no_args(backend, "fetch_all", event_loop).await?;
+        Python::attach(|py| py_to_json_value(py, result.bind(py)))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+}
+
+/// Three-layer collection cache for bulk values
+#[pyclass(name = "CollectionCache")]
+pub struct PyCollectionCache {
+    inner: CollectionCache<PyCollectionBackendWrapper>,
+}
+
+#[pymethods]
+impl PyCollectionCache {
+    /// Create a new CollectionCache.
+    ///
+    /// Args:
+    ///     redis_url: Redis connection URL (e.g. "redis://localhost:6379")
+    ///     backend: Python object with async fetch_all() method
+    ///     config: CacheConfig instance
+    ///     redis_key: Redis key for L2 storage (e.g. "cache:collection:tenant_settings")
+    ///     invalidation_channel: Redis pub/sub channel for cross-instance invalidation
+    #[classmethod]
+    fn create<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        redis_url: String,
+        backend: Py<PyAny>,
+        config: PyCacheConfig,
+        redis_key: String,
+        invalidation_channel: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let event_loop = py
+            .import("asyncio")?
+            .call_method0("get_running_loop")?
+            .unbind();
+
+        future_into_py(py, async move {
+            let redis_client = redis::Client::open(redis_url.as_str())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let wrapper = PyCollectionBackendWrapper {
+                py_backend: backend,
+                event_loop,
+            };
+
+            // Leak the strings to get &'static str required by KeyFormatter.
+            // Cache instances are created once at app startup and live for
+            // the lifetime of the process, so this is intentional.
+            let redis_key: &'static str = Box::leak(redis_key.into_boxed_str());
+            let invalidation_channel: &'static str =
+                Box::leak(invalidation_channel.into_boxed_str());
+
+            let cache = CollectionCache::new(
+                redis_client,
+                wrapper,
+                config.inner,
+                redis_key,
+                invalidation_channel,
+            )
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            Ok(PyCollectionCache { inner: cache })
+        })
+    }
+
+    /// Get the cached collection value, returns a Python object or None
+    fn get<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            match cache.get().await {
+                Ok(Some(value)) => Python::attach(|py| json_value_to_py(py, &value))
+                    .map(Some)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+                Ok(None) => Ok(None),
+                Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+            }
+        })
+    }
+
+    /// Invalidate the cached collection across all layers and instances
+    fn invalidate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            cache
+                .invalidate()
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+}
+
 // ============ Module Functions ============
 
 /// Gracefully shutdown the Redis pub/sub hub.
@@ -511,6 +663,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCacheConfig>()?;
     m.add_class::<PyTenantCache>()?;
     m.add_class::<PySystemFunctionCache>()?;
+    m.add_class::<PyCollectionCache>()?;
     m.add_function(wrap_pyfunction!(shutdown, m)?)?;
     Ok(())
 }

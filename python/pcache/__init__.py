@@ -1,5 +1,6 @@
 from pcache.pcache import (
     CacheConfig,
+    CollectionCache,
     SystemFunctionCache,
     SystemFunctions,
     TenantCache,
@@ -9,6 +10,7 @@ from pcache.pcache import (
 
 __all__ = [
     "CacheConfig",
+    "CollectionCache",
     "SystemFunctionCache",
     "SystemFunctions",
     "TenantCache",

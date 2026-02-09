@@ -16,10 +16,12 @@ mod config;
 mod error;
 #[cfg(feature = "python")]
 mod python;
+pub mod collection_cache;
 pub mod system_function_cache;
 pub mod tenant_cache;
 mod three_layer_cache;
 
+pub use collection_cache::{CollectionBackend, CollectionCache};
 pub use config::CacheConfig;
 pub use error::CacheError;
 pub use system_function_cache::{SystemFunctionBackend, SystemFunctionCache, SystemFunctions};

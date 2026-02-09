@@ -1,6 +1,6 @@
 [package]
 name = "pcache"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Three-layer caching library (L1: moka, L2: Redis, L3: pluggable backend)"
 license = "MIT"
