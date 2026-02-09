@@ -33,37 +33,34 @@ jobs:
           # Linux ARM64 (self-hosted Raspberry Pi 5)
           - os: [self-hosted, Linux, ARM64]
             target: aarch64-unknown-linux-gnu
-            python: "3.11"
+            python: "3.11 3.12 3.13 3.14"
             self-hosted: true
 
     steps:
+      - name: Fix permissions (self-hosted)
+        if: ${{ matrix.self-hosted }}
+        run: sudo chown -R $USER:$USER ${{ github.workspace }} || true
+
       - uses: actions/checkout@v4
 
-      - name: Set up Python (GitHub runners)
+      - name: Set up Python
         if: ${{ !matrix.self-hosted }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Cache Rust (GitHub runners)
+      - name: Cache Rust
         if: ${{ !matrix.self-hosted }}
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build wheels (GitHub runners)
-        if: ${{ !matrix.self-hosted }}
+      - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist -i ${{ matrix.python }}
           manylinux: auto
-
-      - name: Build wheels (self-hosted)
-        if: ${{ matrix.self-hosted }}
-        run: |
-          mkdir -p ~/.cargo-registry
-          docker run --rm -v $(pwd):/io -v ~/.cargo-registry:/root/.cargo/registry -w /io ghcr.io/pyo3/maturin:latest build --release --out dist -i python3.11 python3.12 python3.13 python3.14
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
