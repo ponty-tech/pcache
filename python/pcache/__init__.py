@@ -1,23 +1,23 @@
 from pcache.pcache import (
     CacheConfig,
     CollectionCache,
+    KeyValueCache,
+    KeyValueEntry,
     SystemFunctionCache,
     SystemFunctions,
     TenantCache,
     TenantInfo,
-    UserInfo,
-    UserInfoCache,
     shutdown,
 )
 
 __all__ = [
     "CacheConfig",
     "CollectionCache",
+    "KeyValueCache",
+    "KeyValueEntry",
     "SystemFunctionCache",
     "SystemFunctions",
     "TenantCache",
     "TenantInfo",
-    "UserInfo",
-    "UserInfoCache",
     "shutdown",
 ]

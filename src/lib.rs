@@ -20,14 +20,14 @@ pub mod collection_cache;
 pub mod system_function_cache;
 pub mod tenant_cache;
 mod three_layer_cache;
-pub mod user_info_cache;
+pub mod key_value_cache;
 
 pub use collection_cache::{CollectionBackend, CollectionCache};
 pub use config::CacheConfig;
 pub use error::CacheError;
+pub use key_value_cache::{KeyValueBackend, KeyValueCache, KeyValueEntry};
 pub use system_function_cache::{SystemFunctionBackend, SystemFunctionCache, SystemFunctions};
 pub use tenant_cache::{TenantBackend, TenantCache, TenantInfo};
-pub use user_info_cache::{UserInfo, UserInfoBackend, UserInfoCache};
 pub use three_layer_cache::{
     CacheKey, Cacheable, DataFetcher, KeyFormatter, ThreeLayerCache, shutdown_pubsub_hub,
 };
