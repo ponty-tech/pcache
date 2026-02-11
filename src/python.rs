@@ -9,9 +9,10 @@ use pyo3_async_runtimes::tokio::future_into_py;
 use crate::collection_cache::CollectionBackend;
 use crate::system_function_cache::SystemFunctionBackend;
 use crate::tenant_cache::TenantBackend;
+use crate::user_info_cache::UserInfoBackend;
 use crate::{
     CacheConfig, CollectionCache, SystemFunctionCache, SystemFunctions, TenantCache, TenantInfo,
-    shutdown_pubsub_hub,
+    UserInfo, UserInfoCache, shutdown_pubsub_hub,
 };
 
 // ============ JSON conversion helpers ============
@@ -65,6 +66,18 @@ fn py_to_system_functions(
     py: Python<'_>,
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<Option<SystemFunctions>> {
+    if obj.is_none() {
+        return Ok(None);
+    }
+    let json_mod = py.import("json")?;
+    let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&json_str)
+        .map(Some)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// Convert a Python dict/None to UserInfo via JSON serialization
+fn py_to_user_info(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Option<UserInfo>> {
     if obj.is_none() {
         return Ok(None);
     }
@@ -163,6 +176,38 @@ impl PySystemFunctions {
             "SystemFunctions(tenant_id='{}', count={})",
             self.inner.tenant_id,
             self.inner.functions.len()
+        )
+    }
+}
+
+/// User info (account settings) for an account
+#[pyclass(name = "UserInfo")]
+#[derive(Clone)]
+pub struct PyUserInfo {
+    inner: Arc<UserInfo>,
+}
+
+#[pymethods]
+impl PyUserInfo {
+    #[getter]
+    fn account_id(&self) -> &str {
+        &self.inner.account_id
+    }
+
+    #[getter]
+    fn settings(&self) -> HashMap<String, String> {
+        self.inner.settings.clone()
+    }
+
+    fn get_setting(&self, key: &str) -> Option<String> {
+        self.inner.get_setting(key).map(|s| s.to_owned())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "UserInfo(account_id='{}', settings_count={})",
+            self.inner.account_id,
+            self.inner.settings.len()
         )
     }
 }
@@ -533,6 +578,125 @@ impl PySystemFunctionCache {
     }
 }
 
+/// Wraps a Python object that implements the UserInfoBackend protocol:
+///   async def fetch(self, account_id: str) -> dict | None
+struct PyUserInfoBackendWrapper {
+    py_backend: Py<PyAny>,
+    event_loop: Py<PyAny>,
+}
+
+#[async_trait::async_trait]
+impl UserInfoBackend for PyUserInfoBackendWrapper {
+    async fn fetch(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<UserInfo>, Box<dyn std::error::Error + Send + Sync>> {
+        let (backend, event_loop) = Python::attach(|py| {
+            (
+                self.py_backend.clone_ref(py),
+                self.event_loop.clone_ref(py),
+            )
+        });
+        let result =
+            call_python_async(backend, "fetch", account_id.to_owned(), event_loop).await?;
+        Python::attach(|py| py_to_user_info(py, result.bind(py)))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+}
+
+/// Three-layer user info cache for account settings
+#[pyclass(name = "UserInfoCache")]
+pub struct PyUserInfoCache {
+    inner: UserInfoCache<PyUserInfoBackendWrapper>,
+}
+
+#[pymethods]
+impl PyUserInfoCache {
+    /// Create a new UserInfoCache.
+    ///
+    /// Args:
+    ///     redis_url: Redis connection URL (e.g. "redis://localhost:6379")
+    ///     backend: Python object with async fetch(account_id) method
+    ///     config: CacheConfig instance
+    ///     redis_key_prefix: Prefix for L2 Redis keys (e.g. "cache:account:")
+    ///     redis_key_suffix: Suffix for L2 Redis keys (e.g. ":settings")
+    ///     invalidation_channel: Redis pub/sub channel for cross-instance invalidation
+    #[classmethod]
+    fn create<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        redis_url: String,
+        backend: Py<PyAny>,
+        config: PyCacheConfig,
+        redis_key_prefix: String,
+        redis_key_suffix: String,
+        invalidation_channel: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let event_loop = py
+            .import("asyncio")?
+            .call_method0("get_running_loop")?
+            .unbind();
+
+        future_into_py(py, async move {
+            let redis_client = redis::Client::open(redis_url.as_str())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let wrapper = PyUserInfoBackendWrapper {
+                py_backend: backend,
+                event_loop,
+            };
+
+            // Leak the strings to get &'static str required by KeyFormatter.
+            // Cache instances are created once at app startup and live for
+            // the lifetime of the process, so this is intentional.
+            let redis_key_prefix: &'static str = Box::leak(redis_key_prefix.into_boxed_str());
+            let redis_key_suffix: &'static str = Box::leak(redis_key_suffix.into_boxed_str());
+            let invalidation_channel: &'static str =
+                Box::leak(invalidation_channel.into_boxed_str());
+
+            let cache = UserInfoCache::new(
+                redis_client,
+                wrapper,
+                config.inner,
+                redis_key_prefix,
+                redis_key_suffix,
+                invalidation_channel,
+            )
+            .await
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            Ok(PyUserInfoCache { inner: cache })
+        })
+    }
+
+    /// Get user info for an account, returns UserInfo or None
+    fn get<'py>(&self, py: Python<'py>, account_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            match cache.get(&account_id).await {
+                Ok(Some(info)) => Ok(Some(PyUserInfo { inner: info })),
+                Ok(None) => Ok(None),
+                Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+            }
+        })
+    }
+
+    /// Invalidate user info cache for an account
+    fn invalidate<'py>(
+        &self,
+        py: Python<'py>,
+        account_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            cache
+                .invalidate(&account_id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+}
+
 /// Wraps a Python object that implements the CollectionBackend protocol:
 ///   async def fetch_all(self) -> Any | None
 struct PyCollectionBackendWrapper {
@@ -660,9 +824,11 @@ fn shutdown() {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTenantInfo>()?;
     m.add_class::<PySystemFunctions>()?;
+    m.add_class::<PyUserInfo>()?;
     m.add_class::<PyCacheConfig>()?;
     m.add_class::<PyTenantCache>()?;
     m.add_class::<PySystemFunctionCache>()?;
+    m.add_class::<PyUserInfoCache>()?;
     m.add_class::<PyCollectionCache>()?;
     m.add_function(wrap_pyfunction!(shutdown, m)?)?;
     Ok(())

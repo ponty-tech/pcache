@@ -5,6 +5,8 @@ from pcache.pcache import (
     SystemFunctions,
     TenantCache,
     TenantInfo,
+    UserInfo,
+    UserInfoCache,
     shutdown,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "SystemFunctions",
     "TenantCache",
     "TenantInfo",
+    "UserInfo",
+    "UserInfoCache",
     "shutdown",
 ]
