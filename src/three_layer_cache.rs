@@ -145,40 +145,26 @@ impl PubSubHub {
                             if last_health_check.elapsed() >= health_interval {
                                 last_health_check = Instant::now();
 
-                                let needs_reconnect =
-                                    match redis::aio::ConnectionManager::new(redis_client.clone())
-                                        .await
-                                    {
-                                        Ok(mut conn) => {
-                                            match redis::cmd("PING")
-                                                .query_async::<String>(&mut conn)
-                                                .await
-                                            {
-                                                Ok(_) => false,
-                                                Err(e) => {
-                                                    warn!(
-                                                        "PubSubHub: PING failed ({}); attempting reconnection",
-                                                        e
-                                                    );
-                                                    true
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            warn!(
-                                                "PubSubHub: could not create connection manager for health check: {}",
-                                                e
-                                            );
+                                // Probe the pubsub connection directly by subscribing
+                                // to a test channel. This catches broken pipes that a
+                                // separate PING connection would miss.
+                                let pubsub_healthy =
+                                    match pubsub.subscribe("__pcache_health__").await {
+                                        Ok(()) => {
+                                            let _ =
+                                                pubsub.unsubscribe("__pcache_health__").await;
                                             true
                                         }
+                                        Err(_) => false,
                                     };
 
-                                if needs_reconnect {
+                                if !pubsub_healthy {
+                                    warn!(
+                                        "PubSubHub: pubsub connection is broken, reconnecting"
+                                    );
                                     match redis_client.get_async_pubsub().await {
                                         Ok(new_pubsub) => {
                                             pubsub = new_pubsub;
-                                            // New connection has no subscriptions; clear so
-                                            // they're re-established by the loop below.
                                             subscribed.clear();
                                         }
                                         Err(e) => {
