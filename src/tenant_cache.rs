@@ -185,26 +185,27 @@ impl<B: TenantBackend> TenantCache<B> {
         config: CacheConfig,
     ) -> Result<Self, redis::RedisError> {
         let backend = Arc::new(backend);
+        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let by_id = ThreeLayerCache::new(
             redis_client.clone(),
+            redis_conn.clone(),
             (),
             config.clone(),
             TenantByIdFetcher {
                 backend: Arc::clone(&backend),
             },
             TenantByIdKeyFormatter,
-        )
-        .await?;
+        );
 
         let by_slug = ThreeLayerCache::new(
             redis_client,
+            redis_conn,
             (),
             config,
             TenantBySlugFetcher { backend },
             TenantBySlugKeyFormatter,
-        )
-        .await?;
+        );
 
         Ok(Self { by_id, by_slug })
     }

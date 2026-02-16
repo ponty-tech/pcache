@@ -225,12 +225,13 @@ pub struct PyCacheConfig {
 #[pymethods]
 impl PyCacheConfig {
     #[new]
-    #[pyo3(signature = (l1_max_capacity=1000, l1_ttl_seconds=300, l2_ttl_seconds=900, enable_pubsub=true))]
+    #[pyo3(signature = (l1_max_capacity=1000, l1_ttl_seconds=300, l2_ttl_seconds=900, enable_pubsub=true, negative_ttl_seconds=None))]
     fn new(
         l1_max_capacity: u64,
         l1_ttl_seconds: u64,
         l2_ttl_seconds: u64,
         enable_pubsub: bool,
+        negative_ttl_seconds: Option<u64>,
     ) -> Self {
         Self {
             inner: CacheConfig {
@@ -238,6 +239,7 @@ impl PyCacheConfig {
                 l1_ttl: Duration::from_secs(l1_ttl_seconds),
                 l2_ttl: Duration::from_secs(l2_ttl_seconds),
                 enable_pubsub,
+                negative_ttl: negative_ttl_seconds.map(Duration::from_secs),
             },
         }
     }
@@ -606,6 +608,30 @@ impl KeyValueBackend for PyKeyValueBackendWrapper {
     }
 }
 
+/// Redis key format configuration for KeyValueCache.
+///
+/// Groups the prefix, suffix, and invalidation channel so that
+/// `KeyValueCache.create` doesn't need six positional arguments.
+#[pyclass(name = "KeyValueKeyConfig")]
+#[derive(Clone)]
+pub struct PyKeyValueKeyConfig {
+    redis_key_prefix: String,
+    redis_key_suffix: String,
+    invalidation_channel: String,
+}
+
+#[pymethods]
+impl PyKeyValueKeyConfig {
+    #[new]
+    fn new(redis_key_prefix: String, redis_key_suffix: String, invalidation_channel: String) -> Self {
+        Self {
+            redis_key_prefix,
+            redis_key_suffix,
+            invalidation_channel,
+        }
+    }
+}
+
 /// Three-layer key-value cache with configurable Redis keys and invalidation
 #[pyclass(name = "KeyValueCache")]
 pub struct PyKeyValueCache {
@@ -620,9 +646,7 @@ impl PyKeyValueCache {
     ///     redis_url: Redis connection URL (e.g. "redis://localhost:6379")
     ///     backend: Python object with async fetch(id) method
     ///     config: CacheConfig instance
-    ///     redis_key_prefix: Prefix for L2 Redis keys (e.g. "cache:account:")
-    ///     redis_key_suffix: Suffix for L2 Redis keys (e.g. ":settings")
-    ///     invalidation_channel: Redis pub/sub channel for cross-instance invalidation
+    ///     key_config: KeyValueKeyConfig with prefix, suffix, and invalidation channel
     #[classmethod]
     fn create<'py>(
         _cls: &Bound<'py, PyType>,
@@ -630,9 +654,7 @@ impl PyKeyValueCache {
         redis_url: String,
         backend: Py<PyAny>,
         config: PyCacheConfig,
-        redis_key_prefix: String,
-        redis_key_suffix: String,
-        invalidation_channel: String,
+        key_config: PyKeyValueKeyConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         let event_loop = py
             .import("asyncio")?
@@ -651,10 +673,12 @@ impl PyKeyValueCache {
             // Leak the strings to get &'static str required by KeyFormatter.
             // Cache instances are created once at app startup and live for
             // the lifetime of the process, so this is intentional.
-            let redis_key_prefix: &'static str = Box::leak(redis_key_prefix.into_boxed_str());
-            let redis_key_suffix: &'static str = Box::leak(redis_key_suffix.into_boxed_str());
+            let redis_key_prefix: &'static str =
+                Box::leak(key_config.redis_key_prefix.into_boxed_str());
+            let redis_key_suffix: &'static str =
+                Box::leak(key_config.redis_key_suffix.into_boxed_str());
             let invalidation_channel: &'static str =
-                Box::leak(invalidation_channel.into_boxed_str());
+                Box::leak(key_config.invalidation_channel.into_boxed_str());
 
             let cache = KeyValueCache::new(
                 redis_client,
@@ -826,6 +850,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCacheConfig>()?;
     m.add_class::<PyTenantCache>()?;
     m.add_class::<PySystemFunctionCache>()?;
+    m.add_class::<PyKeyValueKeyConfig>()?;
     m.add_class::<PyKeyValueCache>()?;
     m.add_class::<PyCollectionCache>()?;
     m.add_function(wrap_pyfunction!(shutdown, m)?)?;

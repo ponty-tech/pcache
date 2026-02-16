@@ -19,16 +19,20 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     hash::Hash,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, Weak},
     thread,
     time::{Duration, Instant},
 };
 
 use tokio::runtime::Builder;
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, warn};
 
 use crate::{CacheConfig, CacheError};
+
+/// Sentinel value stored in Redis for negative cache entries (backend returned None).
+/// Uses a null byte which is invalid JSON, so it cannot collide with any real cached value.
+const NEGATIVE_CACHE_SENTINEL: &str = "\0";
 
 type Callback = Arc<dyn Fn(Option<String>) + Send + Sync + 'static>;
 
@@ -36,6 +40,7 @@ enum ControlMsg {
     Register {
         channel: &'static str,
         callback: Box<dyn Fn(Option<String>) + Send + Sync + 'static>,
+        token: Weak<()>,
     },
 }
 
@@ -84,7 +89,8 @@ impl PubSubHub {
                             }
                         };
 
-                        let mut callbacks: HashMap<&'static str, Vec<Callback>> = HashMap::new();
+                        let mut callbacks: HashMap<&'static str, Vec<(Weak<()>, Callback)>> =
+                            HashMap::new();
                         let mut subscribed: HashSet<&'static str> = HashSet::new();
 
                         // Health / reconnection state
@@ -94,12 +100,16 @@ impl PubSubHub {
                         while !shutdown_flag_thread.load(std::sync::atomic::Ordering::SeqCst) {
                             // Drain registration queue
                             while let Ok(cmd) = rx.try_recv() {
-                                let ControlMsg::Register { channel, callback } = cmd;
+                                let ControlMsg::Register {
+                                    channel,
+                                    callback,
+                                    token,
+                                } = cmd;
                                 {
                                     let entry = callbacks.entry(channel).or_default();
                                     let cb_arc: Callback =
                                         Arc::new(move |p: Option<String>| (callback)(p));
-                                    entry.push(cb_arc);
+                                    entry.push((token, cb_arc));
 
                                     if !subscribed.contains(channel) {
                                         // Exponential backoff on initial subscribe failures
@@ -202,38 +212,57 @@ impl PubSubHub {
                                         }
                                     }
                                 }
+
+                                // Prune dead callbacks (caches that have been dropped)
+                                for listeners in callbacks.values_mut() {
+                                    listeners.retain(|(token, _)| token.strong_count() > 0);
+                                }
                             }
 
-                            // Poll for messages
-                            let poll_deadline = Instant::now() + Duration::from_millis(250);
+                            // Poll for messages with timeout so health checks,
+                            // registrations, and shutdown are never starved.
+                            let poll_end = Instant::now() + Duration::from_millis(250);
                             loop {
-                                if let Some(msg) = pubsub.on_message().next().await {
-                                    match msg.get_payload::<String>() {
-                                        Ok(payload) => {
-                                            let ch_name = msg.get_channel_name();
-                                            if let Some(listeners) = callbacks.get(ch_name) {
-                                                for cb in listeners {
-                                                    cb(Some(payload.clone()));
+                                let remaining =
+                                    poll_end.saturating_duration_since(Instant::now());
+                                if remaining.is_zero() {
+                                    break;
+                                }
+                                let mut msg_stream = pubsub.on_message();
+                                match tokio::time::timeout(remaining, msg_stream.next()).await
+                                {
+                                    Ok(Some(msg)) => {
+                                        // Drop the stream before processing so pubsub
+                                        // is not borrowed during callback dispatch.
+                                        drop(msg_stream);
+                                        match msg.get_payload::<String>() {
+                                            Ok(payload) => {
+                                                let ch_name = msg.get_channel_name();
+                                                if let Some(listeners) =
+                                                    callbacks.get(ch_name)
+                                                {
+                                                    for (token, cb) in listeners {
+                                                        if token.strong_count() > 0 {
+                                                            cb(Some(payload.clone()));
+                                                        }
+                                                    }
+                                                } else {
+                                                    debug!(
+                                                        "PubSubHub: no listeners for channel {}",
+                                                        ch_name
+                                                    );
                                                 }
-                                            } else {
-                                                debug!(
-                                                    "PubSubHub: no listeners for channel {}",
-                                                    ch_name
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "PubSubHub: failed to decode pub/sub payload: {}",
+                                                    e
                                                 );
                                             }
                                         }
-                                        Err(e) => {
-                                            warn!(
-                                                "PubSubHub: failed to decode pub/sub payload: {}",
-                                                e
-                                            );
-                                        }
                                     }
-                                } else {
-                                    tokio::time::sleep(Duration::from_millis(25)).await;
-                                }
-                                if Instant::now() >= poll_deadline {
-                                    break;
+                                    Ok(None) => break, // stream ended
+                                    Err(_) => break,   // timeout — return to outer loop
                                 }
                             }
                         }
@@ -252,13 +281,22 @@ impl PubSubHub {
         }
     }
 
-    /// Register a channel-specific callback
+    /// Register a channel-specific callback with a liveness token.
+    ///
+    /// The callback will be dispatched as long as the corresponding `Arc<()>`
+    /// (held by the cache) is alive. Once the cache is dropped, the `Weak`
+    /// token becomes stale and the callback is pruned during health checks.
     fn register_channel(
         &self,
         channel: &'static str,
         callback: Box<dyn Fn(Option<String>) + Send + Sync + 'static>,
+        token: Weak<()>,
     ) {
-        let _ = self.tx.send(ControlMsg::Register { channel, callback });
+        let _ = self.tx.send(ControlMsg::Register {
+            channel,
+            callback,
+            token,
+        });
     }
 }
 
@@ -358,16 +396,18 @@ impl<K: CacheKey, V: Cacheable> Drop for InFlightGuard<K, V> {
             let _ = tx.send(Some(Err("Fetch was cancelled or panicked".to_owned())));
         }
 
-        // Always clean up the in-flight entry
-        // Use try_write to avoid blocking in drop; if we can't get the lock,
-        // spawn a task to clean up asynchronously
+        // Always clean up the in-flight entry.
+        // Use Handle::try_current to avoid panicking if Drop runs outside
+        // a tokio runtime (e.g., during shutdown).
         let key = self.key.clone();
         let in_flight = Arc::clone(&self.in_flight);
 
-        tokio::spawn(async move {
-            let mut guard = in_flight.write().await;
-            guard.remove(&key);
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let mut guard = in_flight.write().await;
+                guard.remove(&key);
+            });
+        }
     }
 }
 
@@ -381,9 +421,12 @@ where
     redis: redis::aio::ConnectionManager,
     backend_ctx: C,
     config: CacheConfig,
-    invalidation_tx: broadcast::Sender<K>,
     /// Track in-flight L3 fetches for request coalescing
     in_flight: Arc<RwLock<HashMap<K, InFlightFetch<V>>>>,
+    /// Liveness token for PubSubHub callback cleanup.
+    /// When all clones of this cache are dropped, callbacks become stale
+    /// and are pruned during health checks.
+    _pubsub_token: Arc<()>,
 }
 
 impl<K, V, C, F, KF> Clone for ThreeLayerCache<K, V, C, F, KF>
@@ -411,30 +454,37 @@ where
     F: DataFetcher<K, V, C>,
     KF: KeyFormatter<K>,
 {
-    /// Create a new three-layer cache
-    pub async fn new(
+    /// Create a new three-layer cache.
+    ///
+    /// The `redis_conn` parameter is a shared `ConnectionManager` — callers
+    /// should create one and pass clones to multiple cache instances so they
+    /// share the same underlying multiplexed Redis connection.
+    ///
+    /// The `redis_client` is only used to initialise the pub/sub hub (once
+    /// per process) and can be the same client that produced the manager.
+    pub fn new(
         redis_client: redis::Client,
+        redis_conn: redis::aio::ConnectionManager,
         backend_ctx: C,
         config: CacheConfig,
         fetcher: F,
         key_formatter: KF,
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Self {
         let l1_cache = Cache::builder()
             .max_capacity(config.l1_max_capacity)
             .time_to_live(config.l1_ttl)
             .build();
 
-        let (invalidation_tx, _) = broadcast::channel(100);
-        let redis_manager = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
+        let pubsub_token = Arc::new(());
 
         let cache = Self {
             inner: Arc::new(ThreeLayerCacheInner {
                 l1_cache,
-                redis: redis_manager,
+                redis: redis_conn,
                 backend_ctx,
                 config: config.clone(),
-                invalidation_tx,
                 in_flight: Arc::new(RwLock::new(HashMap::new())),
+                _pubsub_token: Arc::clone(&pubsub_token),
             }),
             fetcher: Arc::new(fetcher),
             key_formatter: Arc::new(key_formatter),
@@ -442,63 +492,51 @@ where
 
         // Start pub/sub listener if enabled
         if config.enable_pubsub {
-            cache.register_pubsub(&redis_client);
+            cache.register_pubsub(&redis_client, &pubsub_token);
         }
 
-        Ok(cache)
+        cache
     }
 
     /// Register this cache with the shared pub/sub hub
-    fn register_pubsub(&self, redis_client: &redis::Client) {
+    fn register_pubsub(&self, redis_client: &redis::Client, pubsub_token: &Arc<()>) {
+        let token = Arc::downgrade(pubsub_token);
         PUBSUB_HUB
             .get_or_init(|| PubSubHub::start(redis_client.clone()))
-            .register_channel(self.key_formatter.invalidation_channel(), {
-                let l1_cache = self.inner.l1_cache.clone();
-                let key_formatter = Arc::clone(&self.key_formatter);
-                // Spawn a background thread for local invalidations
+            .register_channel(
+                self.key_formatter.invalidation_channel(),
                 {
-                    let l1_cache_local = l1_cache.clone();
-                    let mut local_rx = self.inner.invalidation_tx.subscribe();
-                    thread::spawn(move || {
-                        if let Ok(rt) = Builder::new_current_thread().enable_all().build() {
-                            rt.block_on(async move {
-                                while let Ok(key) = local_rx.recv().await {
-                                    debug!("Local invalidation for key: {}", key);
-                                    l1_cache_local.invalidate(&key).await;
-                                }
-                            });
-                        } else {
-                            error!("Failed to build runtime for local invalidation thread");
-                        }
-                    });
-                }
-                Box::new(move |payload: Option<String>| {
-                    let l1_cache = l1_cache.clone();
-                    let key_formatter = Arc::clone(&key_formatter);
-                    if let Some(pl) = payload {
-                        debug!(
-                            "Cache invalidation received on channel '{}': {}",
-                            key_formatter.invalidation_channel(),
-                            pl
-                        );
-                        if let Some(k) = key_formatter.parse_invalidation_payload(&pl) {
-                            tokio::spawn({
-                                let l1_cache = l1_cache;
-                                let k = k;
-                                async move {
-                                    l1_cache.invalidate(&k).await;
-                                    debug!("L1 cache invalidated for key: {}", k);
-                                }
-                            });
-                        } else {
-                            warn!(
-                                "Unable to parse invalidation payload into cache key: {}",
+                    let l1_cache = self.inner.l1_cache.clone();
+                    let key_formatter = Arc::clone(&self.key_formatter);
+                    Box::new(move |payload: Option<String>| {
+                        let l1_cache = l1_cache.clone();
+                        let key_formatter = Arc::clone(&key_formatter);
+                        if let Some(pl) = payload {
+                            debug!(
+                                "Cache invalidation received on channel '{}': {}",
+                                key_formatter.invalidation_channel(),
                                 pl
                             );
+                            if let Some(k) = key_formatter.parse_invalidation_payload(&pl) {
+                                tokio::spawn({
+                                    let l1_cache = l1_cache;
+                                    let k = k;
+                                    async move {
+                                        l1_cache.invalidate(&k).await;
+                                        debug!("L1 cache invalidated for key: {}", k);
+                                    }
+                                });
+                            } else {
+                                warn!(
+                                    "Unable to parse invalidation payload into cache key: {}",
+                                    pl
+                                );
+                            }
                         }
-                    }
-                })
-            });
+                    })
+                },
+                token,
+            );
     }
 
     /// Get value by key using three-layer caching
@@ -527,6 +565,12 @@ where
         };
 
         if let Some(json) = cached {
+            // Check for negative cache sentinel
+            if json == NEGATIVE_CACHE_SENTINEL {
+                debug!("Cache hit L2 (negative) for key: {}", key);
+                return Ok(None);
+            }
+
             debug!("Cache hit L2 for key: {}", key);
             match serde_json::from_str::<V>(&json) {
                 Ok(value) => {
@@ -640,6 +684,20 @@ where
             }
             Ok(None) => {
                 debug!("Value not found for key: {}", key);
+
+                // Negative caching: store sentinel in L2 so repeated lookups
+                // for non-existent keys don't hit the backend every time.
+                if let Some(neg_ttl) = self.inner.config.negative_ttl
+                    && let Err(e) = redis_conn
+                        .set_ex::<_, _, ()>(&redis_key, NEGATIVE_CACHE_SENTINEL, neg_ttl.as_secs())
+                        .await
+                {
+                    warn!(
+                        "L2 (Redis) negative cache SETEX error for key {} (Redis key: {}): {}. Continuing.",
+                        key, redis_key, e
+                    );
+                }
+
                 Ok(None)
             }
             Err(e) => {
@@ -691,9 +749,6 @@ where
                 );
             }
         }
-
-        // Notify local listeners (non-blocking)
-        let _ = self.inner.invalidation_tx.send(key.clone());
 
         Ok(())
     }

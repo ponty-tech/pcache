@@ -49,6 +49,7 @@ class CacheConfig:
         l1_ttl_seconds: int = 300,
         l2_ttl_seconds: int = 900,
         enable_pubsub: bool = True,
+        negative_ttl_seconds: int | None = None,
     ) -> None: ...
 
 class TenantCache:
@@ -77,6 +78,14 @@ class SystemFunctionCache:
     async def get(self, tenant_id: str) -> SystemFunctions | None: ...
     async def invalidate(self, tenant_id: str) -> None: ...
 
+class KeyValueKeyConfig:
+    def __init__(
+        self,
+        redis_key_prefix: str,
+        redis_key_suffix: str,
+        invalidation_channel: str,
+    ) -> None: ...
+
 class KeyValueCache:
     @classmethod
     async def create(
@@ -84,9 +93,7 @@ class KeyValueCache:
         redis_url: str,
         backend: KeyValueBackendProtocol,
         config: CacheConfig,
-        redis_key_prefix: str,
-        redis_key_suffix: str,
-        invalidation_channel: str,
+        key_config: KeyValueKeyConfig,
     ) -> "KeyValueCache": ...
     async def get(self, id: str) -> KeyValueEntry | None: ...
     async def invalidate(self, id: str) -> None: ...

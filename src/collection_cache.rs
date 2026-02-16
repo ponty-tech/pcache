@@ -106,9 +106,11 @@ impl<B: CollectionBackend> CollectionCache<B> {
         invalidation_channel: &'static str,
     ) -> Result<Self, redis::RedisError> {
         let backend = Arc::new(backend);
+        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
+            redis_conn,
             (),
             config,
             CollectionFetcher { backend },
@@ -116,8 +118,7 @@ impl<B: CollectionBackend> CollectionCache<B> {
                 redis_key,
                 channel: invalidation_channel,
             },
-        )
-        .await?;
+        );
 
         Ok(Self { inner })
     }

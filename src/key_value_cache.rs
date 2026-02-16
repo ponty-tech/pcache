@@ -114,9 +114,11 @@ impl<B: KeyValueBackend> KeyValueCache<B> {
         invalidation_channel: &'static str,
     ) -> Result<Self, redis::RedisError> {
         let backend = Arc::new(backend);
+        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
+            redis_conn,
             (),
             config,
             KeyValueFetcher { backend },
@@ -125,8 +127,7 @@ impl<B: KeyValueBackend> KeyValueCache<B> {
                 key_suffix: redis_key_suffix,
                 channel: invalidation_channel,
             },
-        )
-        .await?;
+        );
 
         Ok(Self { inner })
     }

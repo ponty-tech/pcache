@@ -107,15 +107,16 @@ impl<B: SystemFunctionBackend> SystemFunctionCache<B> {
         config: CacheConfig,
     ) -> Result<Self, redis::RedisError> {
         let backend = Arc::new(backend);
+        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
+            redis_conn,
             (),
             config,
             SystemFunctionFetcher { backend },
             SystemFunctionKeyFormatter,
-        )
-        .await?;
+        );
 
         Ok(Self { inner })
     }
