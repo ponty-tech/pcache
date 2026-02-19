@@ -25,7 +25,7 @@ use std::{
 };
 
 use tokio::runtime::Builder;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
 use crate::{CacheConfig, CacheError};
@@ -363,14 +363,14 @@ type InFlightSender<V> = tokio::sync::watch::Sender<Option<Result<Option<Arc<V>>
 /// with an error if no result was sent.
 struct InFlightGuard<K: CacheKey, V: Cacheable> {
     key: K,
-    in_flight: Arc<RwLock<HashMap<K, InFlightFetch<V>>>>,
+    in_flight: Arc<std::sync::Mutex<HashMap<K, InFlightFetch<V>>>>,
     tx: Option<InFlightSender<V>>,
 }
 
 impl<K: CacheKey, V: Cacheable> InFlightGuard<K, V> {
     fn new(
         key: K,
-        in_flight: Arc<RwLock<HashMap<K, InFlightFetch<V>>>>,
+        in_flight: Arc<std::sync::Mutex<HashMap<K, InFlightFetch<V>>>>,
         tx: InFlightSender<V>,
     ) -> Self {
         Self {
@@ -396,17 +396,11 @@ impl<K: CacheKey, V: Cacheable> Drop for InFlightGuard<K, V> {
             let _ = tx.send(Some(Err("Fetch was cancelled or panicked".to_owned())));
         }
 
-        // Always clean up the in-flight entry.
-        // Use Handle::try_current to avoid panicking if Drop runs outside
-        // a tokio runtime (e.g., during shutdown).
-        let key = self.key.clone();
-        let in_flight = Arc::clone(&self.in_flight);
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let mut guard = in_flight.write().await;
-                guard.remove(&key);
-            });
+        // Synchronous cleanup — no spawned task needed.
+        // Using std::sync::Mutex guarantees the entry is removed immediately,
+        // even during task cancellation or runtime shutdown.
+        if let Ok(mut guard) = self.in_flight.lock() {
+            guard.remove(&self.key);
         }
     }
 }
@@ -421,8 +415,10 @@ where
     redis: redis::aio::ConnectionManager,
     backend_ctx: C,
     config: CacheConfig,
-    /// Track in-flight L3 fetches for request coalescing
-    in_flight: Arc<RwLock<HashMap<K, InFlightFetch<V>>>>,
+    /// Track in-flight L3 fetches for request coalescing.
+    /// Uses `std::sync::Mutex` (not tokio) so `InFlightGuard::drop` can
+    /// clean up synchronously without spawning an async task.
+    in_flight: Arc<std::sync::Mutex<HashMap<K, InFlightFetch<V>>>>,
     /// Liveness token for PubSubHub callback cleanup.
     /// When all clones of this cache are dropped, callbacks become stale
     /// and are pruned during health checks.
@@ -483,7 +479,7 @@ where
                 redis: redis_conn,
                 backend_ctx,
                 config: config.clone(),
-                in_flight: Arc::new(RwLock::new(HashMap::new())),
+                in_flight: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 _pubsub_token: Arc::clone(&pubsub_token),
             }),
             fetcher: Arc::new(fetcher),
@@ -599,13 +595,15 @@ where
             debug!("Cache miss L2 for key: {}", key);
         }
 
-        // Check if there's already an in-flight fetch for this key
+        // Check if there's already an in-flight fetch for this key.
+        // The mutex is held only to clone the watch receiver, then released
+        // before any `.await` so the executor thread is never blocked.
         {
-            let in_flight = self.inner.in_flight.read().await;
-            if let Some(rx) = in_flight.get(key) {
-                let mut rx = rx.clone();
-                drop(in_flight); // Release the read lock
-
+            let maybe_rx = {
+                let in_flight = self.inner.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                in_flight.get(key).cloned()
+            };
+            if let Some(mut rx) = maybe_rx {
                 debug!("Waiting for in-flight L3 fetch for key: {}", key);
 
                 // Wait for the in-flight fetch to complete
@@ -627,30 +625,40 @@ where
         // No in-flight fetch, start one with request coalescing
         let (tx, rx) = tokio::sync::watch::channel(None);
 
-        // Register this fetch as in-flight
-        let guard = {
-            let mut in_flight = self.inner.in_flight.write().await;
-            // Double-check: another task might have started a fetch while we waited for the write lock
-            if let Some(existing_rx) = in_flight.get(key) {
-                let mut rx = existing_rx.clone();
-                drop(in_flight);
-
-                debug!("Waiting for in-flight L3 fetch for key (race): {}", key);
-                loop {
-                    if let Some(result) = rx.borrow().as_ref() {
-                        return match result {
-                            Ok(value) => Ok(value.clone()),
-                            Err(e) => Err(CacheError::Backend(e.clone().into())),
-                        };
-                    }
-                    if rx.changed().await.is_err() {
-                        return Err(CacheError::Backend("In-flight fetch was cancelled".into()));
-                    }
+        // Atomic check-and-insert: lock once, either register our fetch or
+        // grab the existing receiver. The lock is released before any `.await`.
+        let existing_rx = {
+            let mut in_flight = self
+                .inner
+                .in_flight
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match in_flight.get(key).cloned() {
+                Some(rx) => Some(rx),
+                None => {
+                    in_flight.insert(key.clone(), rx);
+                    None
                 }
             }
-            in_flight.insert(key.clone(), rx);
-            InFlightGuard::new(key.clone(), Arc::clone(&self.inner.in_flight), tx)
         };
+
+        // If another task raced us and registered first, wait for their result
+        if let Some(mut rx) = existing_rx {
+            debug!("Waiting for in-flight L3 fetch for key (race): {}", key);
+            loop {
+                if let Some(result) = rx.borrow().as_ref() {
+                    return match result {
+                        Ok(value) => Ok(value.clone()),
+                        Err(e) => Err(CacheError::Backend(e.clone().into())),
+                    };
+                }
+                if rx.changed().await.is_err() {
+                    return Err(CacheError::Backend("In-flight fetch was cancelled".into()));
+                }
+            }
+        }
+
+        let guard = InFlightGuard::new(key.clone(), Arc::clone(&self.inner.in_flight), tx);
 
         // Fetch from L3 (backend)
         // The guard ensures cleanup happens even on panic/cancellation
