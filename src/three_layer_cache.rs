@@ -399,9 +399,11 @@ impl<K: CacheKey, V: Cacheable> Drop for InFlightGuard<K, V> {
         // Synchronous cleanup — no spawned task needed.
         // Using std::sync::Mutex guarantees the entry is removed immediately,
         // even during task cancellation or runtime shutdown.
-        if let Ok(mut guard) = self.in_flight.lock() {
-            guard.remove(&self.key);
-        }
+        let mut guard = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.remove(&self.key);
     }
 }
 
