@@ -96,17 +96,18 @@ impl<B: CollectionBackend> Clone for CollectionCache<B> {
 impl<B: CollectionBackend> CollectionCache<B> {
     /// Create a new CollectionCache.
     ///
+    /// - `redis_conn`: Shared Redis connection manager (avoids redundant connections)
     /// - `redis_key`: The Redis key used for L2 storage (e.g., `"cache:collection:tenants"`)
     /// - `invalidation_channel`: The Redis pub/sub channel for cross-instance invalidation
-    pub async fn new(
+    pub fn new(
         redis_client: redis::Client,
+        redis_conn: redis::aio::ConnectionManager,
         backend: B,
         config: CacheConfig,
         redis_key: &'static str,
         invalidation_channel: &'static str,
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Self {
         let backend = Arc::new(backend);
-        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
@@ -120,7 +121,7 @@ impl<B: CollectionBackend> CollectionCache<B> {
             },
         );
 
-        Ok(Self { inner })
+        Self { inner }
     }
 
     /// Get the cached collection value.

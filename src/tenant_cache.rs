@@ -179,13 +179,13 @@ impl<B: TenantBackend> Clone for TenantCache<B> {
 
 impl<B: TenantBackend> TenantCache<B> {
     /// Create a new TenantCache with the given backend
-    pub async fn new(
+    pub fn new(
         redis_client: redis::Client,
+        redis_conn: redis::aio::ConnectionManager,
         backend: B,
         config: CacheConfig,
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Self {
         let backend = Arc::new(backend);
-        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let by_id = ThreeLayerCache::new(
             redis_client.clone(),
@@ -207,7 +207,7 @@ impl<B: TenantBackend> TenantCache<B> {
             TenantBySlugKeyFormatter,
         );
 
-        Ok(Self { by_id, by_slug })
+        Self { by_id, by_slug }
     }
 
     /// Get tenant by ID

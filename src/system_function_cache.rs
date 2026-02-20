@@ -101,13 +101,13 @@ impl<B: SystemFunctionBackend> Clone for SystemFunctionCache<B> {
 
 impl<B: SystemFunctionBackend> SystemFunctionCache<B> {
     /// Create a new SystemFunctionCache with the given backend
-    pub async fn new(
+    pub fn new(
         redis_client: redis::Client,
+        redis_conn: redis::aio::ConnectionManager,
         backend: B,
         config: CacheConfig,
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Self {
         let backend = Arc::new(backend);
-        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
@@ -118,7 +118,7 @@ impl<B: SystemFunctionBackend> SystemFunctionCache<B> {
             SystemFunctionKeyFormatter,
         );
 
-        Ok(Self { inner })
+        Self { inner }
     }
 
     /// Get system functions for a tenant, using three-layer caching

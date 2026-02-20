@@ -100,21 +100,22 @@ impl<B: KeyValueBackend> KeyValueCache<B> {
     /// # Arguments
     ///
     /// * `redis_client` - Redis connection client
+    /// * `redis_conn` - Shared Redis connection manager (avoids redundant connections)
     /// * `backend` - L3 backend for fetching entries
     /// * `config` - Cache configuration (TTLs, capacity, pub/sub)
     /// * `redis_key_prefix` - Prefix for L2 Redis keys (e.g. `"cache:account:"`)
     /// * `redis_key_suffix` - Suffix for L2 Redis keys (e.g. `":settings"`)
     /// * `invalidation_channel` - Redis pub/sub channel for cross-instance invalidation
-    pub async fn new(
+    pub fn new(
         redis_client: redis::Client,
+        redis_conn: redis::aio::ConnectionManager,
         backend: B,
         config: CacheConfig,
         redis_key_prefix: &'static str,
         redis_key_suffix: &'static str,
         invalidation_channel: &'static str,
-    ) -> Result<Self, redis::RedisError> {
+    ) -> Self {
         let backend = Arc::new(backend);
-        let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone()).await?;
 
         let inner = ThreeLayerCache::new(
             redis_client,
@@ -129,7 +130,7 @@ impl<B: KeyValueBackend> KeyValueCache<B> {
             },
         );
 
-        Ok(Self { inner })
+        Self { inner }
     }
 
     /// Get the entry for the given ID, using three-layer caching.

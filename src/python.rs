@@ -415,15 +415,16 @@ impl PyTenantCache {
         future_into_py(py, async move {
             let redis_client = redis::Client::open(redis_url.as_str())
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone())
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             let wrapper = PyTenantBackendWrapper {
                 py_backend: backend,
                 event_loop,
             };
 
-            let cache = TenantCache::new(redis_client, wrapper, config.inner)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let cache = TenantCache::new(redis_client, redis_conn, wrapper, config.inner);
 
             Ok(PyTenantCache { inner: cache })
         })
@@ -541,15 +542,16 @@ impl PySystemFunctionCache {
         future_into_py(py, async move {
             let redis_client = redis::Client::open(redis_url.as_str())
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone())
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             let wrapper = PySysFnBackendWrapper {
                 py_backend: backend,
                 event_loop,
             };
 
-            let cache = SystemFunctionCache::new(redis_client, wrapper, config.inner)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let cache = SystemFunctionCache::new(redis_client, redis_conn, wrapper, config.inner);
 
             Ok(PySystemFunctionCache { inner: cache })
         })
@@ -664,6 +666,9 @@ impl PyKeyValueCache {
         future_into_py(py, async move {
             let redis_client = redis::Client::open(redis_url.as_str())
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone())
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             let wrapper = PyKeyValueBackendWrapper {
                 py_backend: backend,
@@ -682,14 +687,13 @@ impl PyKeyValueCache {
 
             let cache = KeyValueCache::new(
                 redis_client,
+                redis_conn,
                 wrapper,
                 config.inner,
                 redis_key_prefix,
                 redis_key_suffix,
                 invalidation_channel,
-            )
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            );
 
             Ok(PyKeyValueCache { inner: cache })
         })
@@ -779,6 +783,9 @@ impl PyCollectionCache {
         future_into_py(py, async move {
             let redis_client = redis::Client::open(redis_url.as_str())
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone())
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
             let wrapper = PyCollectionBackendWrapper {
                 py_backend: backend,
@@ -794,13 +801,12 @@ impl PyCollectionCache {
 
             let cache = CollectionCache::new(
                 redis_client,
+                redis_conn,
                 wrapper,
                 config.inner,
                 redis_key,
                 invalidation_channel,
-            )
-            .await
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            );
 
             Ok(PyCollectionCache { inner: cache })
         })

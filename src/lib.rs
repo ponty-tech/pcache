@@ -16,12 +16,15 @@ mod config;
 mod error;
 #[cfg(feature = "python")]
 mod python;
+pub mod client_cache;
 pub mod collection_cache;
+pub mod key_value_cache;
 pub mod system_function_cache;
 pub mod tenant_cache;
 mod three_layer_cache;
-pub mod key_value_cache;
+pub mod user_info_cache;
 
+pub use client_cache::{ClientBackend, ClientCache};
 pub use collection_cache::{CollectionBackend, CollectionCache};
 pub use config::CacheConfig;
 pub use error::CacheError;
@@ -31,6 +34,7 @@ pub use tenant_cache::{TenantBackend, TenantCache, TenantInfo};
 pub use three_layer_cache::{
     CacheKey, Cacheable, DataFetcher, KeyFormatter, ThreeLayerCache, shutdown_pubsub_hub,
 };
+pub use user_info_cache::{UserInfoBackend, UserInfoCache};
 
 // Re-export async_trait for convenience
 pub use async_trait::async_trait;
