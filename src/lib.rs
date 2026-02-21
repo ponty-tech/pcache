@@ -45,6 +45,7 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 #[pymodule]
 fn pcache(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    pyo3_log::init();
     python::register(m)?;
     Ok(())
 }
