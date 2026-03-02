@@ -178,7 +178,7 @@ impl PubSubHub {
                                             subscribed.clear();
                                         }
                                         Err(e) => {
-                                            error!(
+                                            warn!(
                                                 "PubSubHub: reconnection failed: {}",
                                                 e
                                             );
