@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- Bump `redis` from 1.0.3 to 1.0.4
+- Bump `futures` from 0.3.31 to 0.3.32
+- Bump `actions/download-artifact` from 4 to 7
+- Bump `actions/checkout` from 4 to 6
+- Bump `actions/setup-python` from 5 to 6
+- Bump `actions/upload-artifact` from 4 to 6
+- Bump `google-github-actions/auth` from 2 to 3
+
 ## [0.5.2] - 2026-03-02
 
 ### Fixed
