@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   ARTIFACT_REGISTRY_URL: https://europe-north1-python.pkg.dev/prs-next/ponty/
 
