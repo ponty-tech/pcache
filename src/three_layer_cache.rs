@@ -540,15 +540,14 @@ where
     /// Get value by key using three-layer caching
     pub async fn get(&self, key: &K) -> Result<Option<Arc<V>>, CacheError> {
         // Try L1 cache first
+        let redis_key = self.key_formatter.format_key(key);
+
         if let Some(value) = self.inner.l1_cache.get(key).await {
-            debug!("Cache hit L1 for key: {}", key);
+            debug!("Cache hit L1 for key: {}", redis_key);
             return Ok(Some(value));
         }
 
-        debug!("Cache miss L1 for key: {}", key);
-
-        // Try L2 (Redis) cache
-        let redis_key = self.key_formatter.format_key(key);
+        debug!("Cache miss L1 for key: {}", redis_key);
         let mut redis_conn = self.inner.redis.clone();
 
         let cached: Option<String> = match redis_conn.get::<_, Option<String>>(&redis_key).await {
@@ -565,11 +564,11 @@ where
         if let Some(json) = cached {
             // Check for negative cache sentinel
             if json == NEGATIVE_CACHE_SENTINEL {
-                debug!("Cache hit L2 (negative) for key: {}", key);
+                debug!("Cache hit L2 (negative) for key: {}", redis_key);
                 return Ok(None);
             }
 
-            debug!("Cache hit L2 for key: {}", key);
+            debug!("Cache hit L2 for key: {}", redis_key);
             match serde_json::from_str::<V>(&json) {
                 Ok(value) => {
                     let arc_value = Arc::new(value);
@@ -594,7 +593,7 @@ where
                 }
             }
         } else {
-            debug!("Cache miss L2 for key: {}", key);
+            debug!("Cache miss L2 for key: {}", redis_key);
         }
 
         // Check if there's already an in-flight fetch for this key.
@@ -666,7 +665,7 @@ where
         // The guard ensures cleanup happens even on panic/cancellation
         let result = match self.fetcher.fetch(&self.inner.backend_ctx, key).await {
             Ok(Some(value)) => {
-                debug!("Cache miss - fetched from backend for key: {}", key);
+                debug!("Cache miss - fetched from backend for key: {}", redis_key);
 
                 // Serialize once for Redis
                 let json = serde_json::to_string(&value)?;
