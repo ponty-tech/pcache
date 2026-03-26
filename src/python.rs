@@ -838,6 +838,169 @@ impl PyCollectionCache {
     }
 }
 
+// ============ Client Cache ============
+
+/// Wraps a Python object that implements the ClientBackend protocol:
+///   async def fetch_by_id(self, id: str) -> dict | None
+struct PyClientBackendWrapper {
+    py_backend: Py<PyAny>,
+    event_loop: Py<PyAny>,
+}
+
+#[async_trait::async_trait]
+impl crate::client_cache::ClientBackend for PyClientBackendWrapper {
+    type Client = serde_json::Value;
+
+    async fn fetch_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+        let (backend, event_loop) = Python::attach(|py| {
+            (
+                self.py_backend.clone_ref(py),
+                self.event_loop.clone_ref(py),
+            )
+        });
+        let result = call_python_async(backend, "fetch_by_id", id.to_owned(), event_loop).await?;
+        Python::attach(|py| py_to_json_value(py, result.bind(py)))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+}
+
+/// Cached OAuth2 client information.
+///
+/// This reads from the same Redis L2 keys (`cache:client:{id}`) and pub/sub
+/// channel (`cache:invalidate:client`) as the Rust `ClientCache` in Hermes.
+/// Both Rust and Python share the same cached data.
+#[pyclass(name = "ClientInfo")]
+#[derive(Clone)]
+pub struct PyClientInfo {
+    inner: Arc<serde_json::Value>,
+}
+
+#[pymethods]
+impl PyClientInfo {
+    #[getter]
+    fn id(&self) -> Option<&str> {
+        self.inner.get("id").and_then(|v| v.as_str())
+    }
+
+    #[getter]
+    fn client_type(&self) -> &str {
+        self.inner
+            .get("client_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("standard")
+    }
+
+    #[getter]
+    fn scopes(&self) -> Option<&str> {
+        self.inner.get("scopes").and_then(|v| v.as_str())
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.inner.get("name").and_then(|v| v.as_str())
+    }
+
+    #[getter]
+    fn single_tenant(&self) -> bool {
+        self.inner
+            .get("single_tenant")
+            .and_then(|v| v.as_i64())
+            .map(|v| v != 0)
+            .unwrap_or(false)
+    }
+
+    #[getter]
+    fn grant_types(&self) -> Option<&str> {
+        self.inner.get("grant_types").and_then(|v| v.as_str())
+    }
+
+    /// Get any field as a Python object
+    fn get(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        match self.inner.get(key) {
+            Some(v) => json_value_to_py(py, v),
+            None => Ok(py.None()),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        let id = self.id().unwrap_or("?");
+        let ct = self.client_type();
+        format!("ClientInfo(id='{id}', client_type='{ct}')")
+    }
+}
+
+/// Three-layer client cache sharing Redis L2 with Hermes.
+#[pyclass(name = "ClientCache")]
+pub struct PyClientCache {
+    inner: crate::ClientCache<PyClientBackendWrapper>,
+}
+
+#[pymethods]
+impl PyClientCache {
+    /// Create a new ClientCache.
+    ///
+    /// Args:
+    ///     redis_url: Redis connection URL (e.g. "redis://localhost:6379")
+    ///     backend: Python object with async `fetch_by_id(id: str) -> dict | None`
+    ///     config: CacheConfig instance
+    #[classmethod]
+    fn create<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        redis_url: String,
+        backend: Py<PyAny>,
+        config: PyCacheConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let event_loop = py
+            .import("asyncio")?
+            .call_method0("get_running_loop")?
+            .unbind();
+
+        future_into_py(py, async move {
+            let redis_client = redis::Client::open(redis_url.as_str())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let redis_conn = redis::aio::ConnectionManager::new(redis_client.clone())
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+            let wrapper = PyClientBackendWrapper {
+                py_backend: backend,
+                event_loop,
+            };
+
+            let cache = crate::ClientCache::new(redis_client, redis_conn, wrapper, config.inner);
+
+            Ok(PyClientCache { inner: cache })
+        })
+    }
+
+    /// Get client by ID, returns ClientInfo or None
+    fn get<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            match cache.get(&id).await {
+                Ok(Some(info)) => Ok(Some(PyClientInfo { inner: info })),
+                Ok(None) => Ok(None),
+                Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+            }
+        })
+    }
+
+    /// Invalidate client cache by ID
+    fn invalidate<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
+        let cache = self.inner.clone();
+        future_into_py(py, async move {
+            cache
+                .invalidate(&id)
+                .await
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+}
+
 // ============ Module Functions ============
 
 /// Gracefully shutdown the Redis pub/sub hub.
@@ -859,6 +1022,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyKeyValueKeyConfig>()?;
     m.add_class::<PyKeyValueCache>()?;
     m.add_class::<PyCollectionCache>()?;
+    m.add_class::<PyClientInfo>()?;
+    m.add_class::<PyClientCache>()?;
     m.add_function(wrap_pyfunction!(shutdown, m)?)?;
     Ok(())
 }
