@@ -1,5 +1,7 @@
 from pcache.pcache import (
     CacheConfig,
+    ClientCache,
+    ClientInfo,
     CollectionCache,
     KeyValueCache,
     KeyValueEntry,
@@ -13,6 +15,8 @@ from pcache.pcache import (
 
 __all__ = [
     "CacheConfig",
+    "ClientCache",
+    "ClientInfo",
     "CollectionCache",
     "KeyValueCache",
     "KeyValueEntry",
