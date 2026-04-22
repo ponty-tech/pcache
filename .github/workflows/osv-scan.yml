@@ -1,0 +1,19 @@
+name: OSV Vulnerability Scan
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --recursive
+            .
