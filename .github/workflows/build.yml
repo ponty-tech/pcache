@@ -65,6 +65,11 @@ jobs:
           target: ${{ matrix.target }}
           args: --release --out dist -i ${{ matrix.python }}
           manylinux: auto
+          # Cap Rust codegen parallelism on the self-hosted Pi 5 (8GB) so a
+          # release build of all Python versions cannot OOM the host. The build
+          # runs inside the manylinux container, so the runner .env does not
+          # reach it — pass the cap via docker-options instead.
+          docker-options: ${{ matrix.self-hosted && '-e CARGO_BUILD_JOBS=2' || '' }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v6
