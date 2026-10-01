@@ -27,6 +27,9 @@ pub struct CacheConfig {
     /// implements `parse_invalidation_payload`) or by its TTL. An entry may be
     /// refreshed from a still-live L2 sentinel, so without invalidation a
     /// missing key can stay hidden for up to twice `negative_ttl`.
+    /// An invalidation that arrives while a lookup of the same key is already
+    /// under way can also be overtaken by that lookup, which then hides the key
+    /// on that instance for one `negative_ttl`. Keep `negative_ttl` short.
     /// Has no effect unless `negative_ttl` is set.
     pub negative_l1: bool,
 }
