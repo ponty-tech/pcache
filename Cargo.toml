@@ -37,12 +37,12 @@ optional = true
 
 # Python bindings (optional)
 [dependencies.pyo3]
-version = "0.27"
+version = "0.29"
 features = ["extension-module", "abi3-py311"]
 optional = true
 
 [dependencies.pyo3-async-runtimes]
-version = "0.27"
+version = "0.29"
 features = ["tokio-runtime"]
 optional = true
 

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Security
+- Bump `pyo3` and `pyo3-async-runtimes` from 0.27 to 0.29 (RUSTSEC-2026-0176, RUSTSEC-2026-0177), `crossbeam-epoch` to 0.9.21 (RUSTSEC-2026-0204) and `event-listener` to 5.4.2 (RUSTSEC-2026-0221). Python classes keep their `FromPyObject` behaviour through an explicit `from_py_object`.
+
+## [Unreleased]
+
 ### Added
 - `CacheConfig::negative_l1` (Python: `negative_l1=False`): opt-in in-memory negative caching, so a lookup of a missing key no longer costs a Redis round-trip while `negative_ttl` lasts. Adds a field to `CacheConfig`, so Rust callers that build it with a struct literal must set it.
 

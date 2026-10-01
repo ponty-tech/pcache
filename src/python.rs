@@ -94,7 +94,7 @@ fn py_to_key_value_entry(
 // ============ Data Classes ============
 
 /// Tenant information with settings
-#[pyclass(name = "TenantInfo")]
+#[pyclass(name = "TenantInfo", from_py_object)]
 #[derive(Clone)]
 pub struct PyTenantInfo {
     inner: Arc<TenantInfo>,
@@ -152,7 +152,7 @@ impl PyTenantInfo {
 }
 
 /// System functions (feature flags) for a tenant
-#[pyclass(name = "SystemFunctions")]
+#[pyclass(name = "SystemFunctions", from_py_object)]
 #[derive(Clone)]
 pub struct PySystemFunctions {
     inner: Arc<SystemFunctions>,
@@ -184,7 +184,7 @@ impl PySystemFunctions {
 }
 
 /// A cached key-value entry
-#[pyclass(name = "KeyValueEntry")]
+#[pyclass(name = "KeyValueEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyKeyValueEntry {
     inner: Arc<KeyValueEntry>,
@@ -216,7 +216,7 @@ impl PyKeyValueEntry {
 }
 
 /// Cache configuration
-#[pyclass(name = "CacheConfig")]
+#[pyclass(name = "CacheConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCacheConfig {
     inner: CacheConfig,
@@ -616,7 +616,7 @@ impl KeyValueBackend for PyKeyValueBackendWrapper {
 ///
 /// Groups the prefix, suffix, and invalidation channel so that
 /// `KeyValueCache.create` doesn't need six positional arguments.
-#[pyclass(name = "KeyValueKeyConfig")]
+#[pyclass(name = "KeyValueKeyConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyKeyValueKeyConfig {
     redis_key_prefix: String,
@@ -874,7 +874,7 @@ impl crate::client_cache::ClientBackend for PyClientBackendWrapper {
 /// This reads from the same Redis L2 keys (`cache:client:{id}`) and pub/sub
 /// channel (`cache:invalidate:client`) as the Rust `ClientCache` in Hermes.
 /// Both Rust and Python share the same cached data.
-#[pyclass(name = "ClientInfo")]
+#[pyclass(name = "ClientInfo", from_py_object)]
 #[derive(Clone)]
 pub struct PyClientInfo {
     inner: Arc<serde_json::Value>,
