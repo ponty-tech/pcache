@@ -225,13 +225,14 @@ pub struct PyCacheConfig {
 #[pymethods]
 impl PyCacheConfig {
     #[new]
-    #[pyo3(signature = (l1_max_capacity=1000, l1_ttl_seconds=300, l2_ttl_seconds=900, enable_pubsub=true, negative_ttl_seconds=None))]
+    #[pyo3(signature = (l1_max_capacity=1000, l1_ttl_seconds=300, l2_ttl_seconds=900, enable_pubsub=true, negative_ttl_seconds=None, negative_l1=false))]
     fn new(
         l1_max_capacity: u64,
         l1_ttl_seconds: u64,
         l2_ttl_seconds: u64,
         enable_pubsub: bool,
         negative_ttl_seconds: Option<u64>,
+        negative_l1: bool,
     ) -> Self {
         Self {
             inner: CacheConfig {
@@ -240,6 +241,7 @@ impl PyCacheConfig {
                 l2_ttl: Duration::from_secs(l2_ttl_seconds),
                 enable_pubsub,
                 negative_ttl: negative_ttl_seconds.map(Duration::from_secs),
+                negative_l1,
             },
         }
     }

@@ -50,6 +50,7 @@ class CacheConfig:
         l2_ttl_seconds: int = 900,
         enable_pubsub: bool = True,
         negative_ttl_seconds: int | None = None,
+        negative_l1: bool = False,
     ) -> None: ...
 
 class TenantCache:

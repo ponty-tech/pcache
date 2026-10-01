@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `CacheConfig::negative_l1` (Python: `negative_l1=False`): opt-in in-memory negative caching, so a lookup of a missing key no longer costs a Redis round-trip while `negative_ttl` lasts. Adds a field to `CacheConfig`, so Rust callers that build it with a struct literal must set it.
+
 ### Changed
 - Bump `redis` from 1.0.3 to 1.0.4
 - Bump `futures` from 0.3.31 to 0.3.32
