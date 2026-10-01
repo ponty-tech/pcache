@@ -18,6 +18,20 @@ pub struct CacheConfig {
     /// repeated backend lookups for non-existent keys.
     /// `None` disables negative caching (default).
     pub negative_ttl: Option<Duration>,
+    /// Also remember "not found" results in L1 (in memory), for `negative_ttl`.
+    /// Without it every lookup of a missing key costs a Redis round-trip.
+    ///
+    /// Opt-in because it changes when a newly created key becomes visible: on
+    /// other instances the in-memory entry is only cleared by a pub/sub
+    /// invalidation (which needs `enable_pubsub` and a `KeyFormatter` that
+    /// implements `parse_invalidation_payload`) or by its TTL. An entry may be
+    /// refreshed from a still-live L2 sentinel, so without invalidation a
+    /// missing key can stay hidden for up to twice `negative_ttl`.
+    /// An invalidation that arrives while a lookup of the same key is already
+    /// under way can also be overtaken by that lookup, which then hides the key
+    /// on that instance for one `negative_ttl`. Keep `negative_ttl` short.
+    /// Has no effect unless `negative_ttl` is set.
+    pub negative_l1: bool,
 }
 
 impl Default for CacheConfig {
@@ -28,6 +42,7 @@ impl Default for CacheConfig {
             l2_ttl: Duration::from_secs(900), // 15 minutes
             enable_pubsub: true,
             negative_ttl: None,
+            negative_l1: false,
         }
     }
 }

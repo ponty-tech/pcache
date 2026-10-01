@@ -414,6 +414,9 @@ where
     C: Send + Sync + 'static,
 {
     l1_cache: Cache<K, Arc<V>>,
+    /// Keys the backend reported as missing. `None` unless
+    /// `CacheConfig::negative_l1` is on and `negative_ttl` is set.
+    l1_negative: Option<Cache<K, ()>>,
     redis: redis::aio::ConnectionManager,
     backend_ctx: C,
     config: CacheConfig,
@@ -473,11 +476,22 @@ where
             .time_to_live(config.l1_ttl)
             .build();
 
+        let l1_negative = config
+            .negative_ttl
+            .filter(|_| config.negative_l1)
+            .map(|ttl| {
+                Cache::builder()
+                    .max_capacity(config.l1_max_capacity)
+                    .time_to_live(ttl)
+                    .build()
+            });
+
         let pubsub_token = Arc::new(());
 
         let cache = Self {
             inner: Arc::new(ThreeLayerCacheInner {
                 l1_cache,
+                l1_negative,
                 redis: redis_conn,
                 backend_ctx,
                 config: config.clone(),
@@ -505,9 +519,11 @@ where
                 self.key_formatter.invalidation_channel(),
                 {
                     let l1_cache = self.inner.l1_cache.clone();
+                    let l1_negative = self.inner.l1_negative.clone();
                     let key_formatter = Arc::clone(&self.key_formatter);
                     Box::new(move |payload: Option<String>| {
                         let l1_cache = l1_cache.clone();
+                        let l1_negative = l1_negative.clone();
                         let key_formatter = Arc::clone(&key_formatter);
                         if let Some(pl) = payload {
                             debug!(
@@ -521,6 +537,9 @@ where
                                     let k = k;
                                     async move {
                                         l1_cache.invalidate(&k).await;
+                                        if let Some(negative) = &l1_negative {
+                                            negative.invalidate(&k).await;
+                                        }
                                         debug!("L1 cache invalidated for key: {}", k);
                                     }
                                 });
@@ -547,6 +566,13 @@ where
             return Ok(Some(value));
         }
 
+        if let Some(negative) = &self.inner.l1_negative
+            && negative.get(key).await.is_some()
+        {
+            debug!("Cache hit L1 (negative) for key: {}", redis_key);
+            return Ok(None);
+        }
+
         debug!("Cache miss L1 for key: {}", redis_key);
         let mut redis_conn = self.inner.redis.clone();
 
@@ -565,6 +591,9 @@ where
             // Check for negative cache sentinel
             if json == NEGATIVE_CACHE_SENTINEL {
                 debug!("Cache hit L2 (negative) for key: {}", redis_key);
+                if let Some(negative) = &self.inner.l1_negative {
+                    negative.insert(key.clone(), ()).await;
+                }
                 return Ok(None);
             }
 
@@ -707,6 +736,10 @@ where
                     );
                 }
 
+                if let Some(negative) = &self.inner.l1_negative {
+                    negative.insert(key.clone(), ()).await;
+                }
+
                 Ok(None)
             }
             Err(e) => {
@@ -730,6 +763,9 @@ where
 
         // Invalidate L1 cache
         self.inner.l1_cache.invalidate(key).await;
+        if let Some(negative) = &self.inner.l1_negative {
+            negative.invalidate(key).await;
+        }
 
         // Invalidate L2 cache (Redis) - best effort
         let redis_key = self.key_formatter.format_key(key);
@@ -760,5 +796,95 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Reports every key as missing and counts how often it was asked.
+    struct MissingFetcher(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl DataFetcher<String, String, ()> for MissingFetcher {
+        async fn fetch(
+            &self,
+            _ctx: &(),
+            _key: &String,
+        ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+    }
+
+    struct TestKeys;
+
+    impl KeyFormatter<String> for TestKeys {
+        fn format_key(&self, key: &String) -> String {
+            format!("pcache:test:{key}")
+        }
+
+        fn invalidation_channel(&self) -> &'static str {
+            "pcache:test:invalidate"
+        }
+    }
+
+    /// Looks a missing key up twice, removing the L2 sentinel in between, and
+    /// returns how many times the backend was asked. With the sentinel gone,
+    /// only an in-memory entry can answer the second lookup.
+    ///
+    /// Needs a live Redis: set `PCACHE_TEST_REDIS_URL` to run, otherwise the
+    /// test passes without checking anything.
+    async fn backend_calls_for_two_lookups(negative_l1: bool) -> Option<usize> {
+        let url = std::env::var("PCACHE_TEST_REDIS_URL").ok()?;
+        let client = redis::Client::open(url).unwrap();
+        let mut conn = client.get_connection_manager().await.unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = ThreeLayerCache::new(
+            client,
+            conn.clone(),
+            (),
+            CacheConfig {
+                enable_pubsub: false,
+                negative_ttl: Some(Duration::from_secs(30)),
+                negative_l1,
+                ..CacheConfig::default()
+            },
+            MissingFetcher(Arc::clone(&calls)),
+            TestKeys,
+        );
+
+        let key = format!("negative-l1-{negative_l1}-{}", std::process::id());
+        let redis_key = TestKeys.format_key(&key);
+
+        assert!(cache.get(&key).await.unwrap().is_none());
+        conn.del::<_, ()>(&redis_key).await.unwrap();
+        assert!(cache.get(&key).await.unwrap().is_none());
+        let after_two_lookups = calls.load(Ordering::SeqCst);
+
+        // An invalidation must clear the in-memory entry as well.
+        cache.invalidate(&key).await.unwrap();
+        assert!(cache.get(&key).await.unwrap().is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), after_two_lookups + 1);
+
+        conn.del::<_, ()>(&redis_key).await.unwrap();
+        Some(after_two_lookups)
+    }
+
+    #[tokio::test]
+    async fn negative_l1_answers_a_missing_key_from_memory() {
+        if let Some(calls) = backend_calls_for_two_lookups(true).await {
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn without_negative_l1_a_missing_key_falls_through() {
+        if let Some(calls) = backend_calls_for_two_lookups(false).await {
+            assert_eq!(calls, 2);
+        }
     }
 }
