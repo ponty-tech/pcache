@@ -39,8 +39,10 @@ jobs:
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
           code=true
-          # Manual runs, new branches and rewritten history have no usable base: run everything.
-          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] && git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+          # Manual runs and tag pushes always run everything, and so do new branches and
+          # rewritten history, which have no usable base.
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] && [[ "$GITHUB_REF" != refs/tags/* ]] \
+              && git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
             # No grep -q: it exits at the first match and the SIGPIPE to git diff fails the
             # pipeline under the runner's pipefail, which would skip the tests for code changes.
             if ! git diff --name-only "$BASE" "$GITHUB_SHA" | grep -vE '(\.md$|^docs/|^LICENSE$)' > /dev/null; then
