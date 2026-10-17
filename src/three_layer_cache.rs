@@ -399,10 +399,7 @@ impl<K: CacheKey, V: Cacheable> Drop for InFlightGuard<K, V> {
         // Synchronous cleanup — no spawned task needed.
         // Using std::sync::Mutex guarantees the entry is removed immediately,
         // even during task cancellation or runtime shutdown.
-        let mut guard = self
-            .in_flight
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
         guard.remove(&self.key);
     }
 }
@@ -630,7 +627,11 @@ where
         // before any `.await` so the executor thread is never blocked.
         {
             let maybe_rx = {
-                let in_flight = self.inner.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+                let in_flight = self
+                    .inner
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 in_flight.get(key).cloned()
             };
             if let Some(mut rx) = maybe_rx {

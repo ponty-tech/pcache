@@ -10,8 +10,8 @@
 
 use crate::{CacheConfig, CacheError, DataFetcher, KeyFormatter, ThreeLayerCache};
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 /// Trait for fetching user information from the backend (L3).
@@ -120,14 +120,8 @@ mod tests {
     #[test]
     fn user_info_key_formatter_format_key() {
         let formatter = UserInfoKeyFormatter;
-        assert_eq!(
-            formatter.format_key(&42),
-            "cache:account:42:userinfo"
-        );
-        assert_eq!(
-            formatter.format_key(&12345),
-            "cache:account:12345:userinfo"
-        );
+        assert_eq!(formatter.format_key(&42), "cache:account:42:userinfo");
+        assert_eq!(formatter.format_key(&12345), "cache:account:12345:userinfo");
     }
 
     #[test]
@@ -142,26 +136,14 @@ mod tests {
     #[test]
     fn user_info_key_formatter_parse_invalidation_payload_valid() {
         let formatter = UserInfoKeyFormatter;
-        assert_eq!(
-            formatter.parse_invalidation_payload("42"),
-            Some(42)
-        );
-        assert_eq!(
-            formatter.parse_invalidation_payload("12345"),
-            Some(12345)
-        );
+        assert_eq!(formatter.parse_invalidation_payload("42"), Some(42));
+        assert_eq!(formatter.parse_invalidation_payload("12345"), Some(12345));
     }
 
     #[test]
     fn user_info_key_formatter_parse_invalidation_payload_invalid() {
         let formatter = UserInfoKeyFormatter;
-        assert_eq!(
-            formatter.parse_invalidation_payload("not-a-number"),
-            None
-        );
-        assert_eq!(
-            formatter.parse_invalidation_payload(""),
-            None
-        );
+        assert_eq!(formatter.parse_invalidation_payload("not-a-number"), None);
+        assert_eq!(formatter.parse_invalidation_payload(""), None);
     }
 }

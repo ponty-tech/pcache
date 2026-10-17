@@ -7,9 +7,9 @@ use pyo3::types::{PyDict, PyList, PyType};
 use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::collection_cache::CollectionBackend;
+use crate::key_value_cache::KeyValueBackend;
 use crate::system_function_cache::SystemFunctionBackend;
 use crate::tenant_cache::TenantBackend;
-use crate::key_value_cache::KeyValueBackend;
 use crate::{
     CacheConfig, CollectionCache, KeyValueCache, KeyValueEntry, SystemFunctionCache,
     SystemFunctions, TenantCache, TenantInfo, shutdown_pubsub_hub,
@@ -279,8 +279,7 @@ async fn call_python_async(
                 (coro.bind(py), event_loop.bind(py)),
             )?;
             // cf.result() blocks, releasing the GIL during the wait
-            cf.call_method1("result", (30.0,))
-                .map(|r| r.unbind())
+            cf.call_method1("result", (30.0,)).map(|r| r.unbind())
         })
     })
     .await
@@ -305,8 +304,7 @@ async fn call_python_async_no_args(
                 "run_coroutine_threadsafe",
                 (coro.bind(py), event_loop.bind(py)),
             )?;
-            cf.call_method1("result", (30.0,))
-                .map(|r| r.unbind())
+            cf.call_method1("result", (30.0,)).map(|r| r.unbind())
         })
     })
     .await
@@ -331,12 +329,8 @@ impl TenantBackend for PyTenantBackendWrapper {
         &self,
         id: &str,
     ) -> Result<Option<TenantInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
         let result = call_python_async(backend, "fetch_by_id", id.to_owned(), event_loop).await?;
         Python::attach(|py| py_to_tenant_info(py, result.bind(py)))
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -346,12 +340,8 @@ impl TenantBackend for PyTenantBackendWrapper {
         &self,
         slug: &str,
     ) -> Result<Option<TenantInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
         let result =
             call_python_async(backend, "fetch_by_slug", slug.to_owned(), event_loop).await?;
         Python::attach(|py| py_to_tenant_info(py, result.bind(py)))
@@ -372,14 +362,9 @@ impl SystemFunctionBackend for PySysFnBackendWrapper {
         &self,
         tenant_id: &str,
     ) -> Result<Option<SystemFunctions>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
-        let result =
-            call_python_async(backend, "fetch", tenant_id.to_owned(), event_loop).await?;
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
+        let result = call_python_async(backend, "fetch", tenant_id.to_owned(), event_loop).await?;
         Python::attach(|py| py_to_system_functions(py, result.bind(py)))
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
@@ -468,11 +453,7 @@ impl PyTenantCache {
     }
 
     /// Invalidate tenant cache by ID
-    fn invalidate_by_id<'py>(
-        &self,
-        py: Python<'py>,
-        id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn invalidate_by_id<'py>(&self, py: Python<'py>, id: String) -> PyResult<Bound<'py, PyAny>> {
         let cache = self.inner.clone();
         future_into_py(py, async move {
             cache
@@ -572,11 +553,7 @@ impl PySystemFunctionCache {
     }
 
     /// Invalidate system function cache for a tenant
-    fn invalidate<'py>(
-        &self,
-        py: Python<'py>,
-        tenant_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn invalidate<'py>(&self, py: Python<'py>, tenant_id: String) -> PyResult<Bound<'py, PyAny>> {
         let cache = self.inner.clone();
         future_into_py(py, async move {
             cache
@@ -600,12 +577,8 @@ impl KeyValueBackend for PyKeyValueBackendWrapper {
         &self,
         id: &str,
     ) -> Result<Option<KeyValueEntry>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
         let result = call_python_async(backend, "fetch", id.to_owned(), event_loop).await?;
         Python::attach(|py| py_to_key_value_entry(py, result.bind(py)))
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -627,7 +600,11 @@ pub struct PyKeyValueKeyConfig {
 #[pymethods]
 impl PyKeyValueKeyConfig {
     #[new]
-    fn new(redis_key_prefix: String, redis_key_suffix: String, invalidation_channel: String) -> Self {
+    fn new(
+        redis_key_prefix: String,
+        redis_key_suffix: String,
+        invalidation_channel: String,
+    ) -> Self {
         Self {
             redis_key_prefix,
             redis_key_suffix,
@@ -739,12 +716,8 @@ impl CollectionBackend for PyCollectionBackendWrapper {
     async fn fetch_all(
         &self,
     ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
         let result = call_python_async_no_args(backend, "fetch_all", event_loop).await?;
         Python::attach(|py| py_to_json_value(py, result.bind(py)))
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -857,12 +830,8 @@ impl crate::client_cache::ClientBackend for PyClientBackendWrapper {
         &self,
         id: &str,
     ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let (backend, event_loop) = Python::attach(|py| {
-            (
-                self.py_backend.clone_ref(py),
-                self.event_loop.clone_ref(py),
-            )
-        });
+        let (backend, event_loop) =
+            Python::attach(|py| (self.py_backend.clone_ref(py), self.event_loop.clone_ref(py)));
         let result = call_python_async(backend, "fetch_by_id", id.to_owned(), event_loop).await?;
         Python::attach(|py| py_to_json_value(py, result.bind(py)))
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)

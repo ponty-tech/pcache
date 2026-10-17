@@ -14,8 +14,8 @@
 
 use crate::{CacheConfig, CacheError, DataFetcher, KeyFormatter, ThreeLayerCache};
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 /// The fixed internal key used for the single cache entry.
