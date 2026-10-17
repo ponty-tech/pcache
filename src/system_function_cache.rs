@@ -122,10 +122,7 @@ impl<B: SystemFunctionBackend> SystemFunctionCache<B> {
     }
 
     /// Get system functions for a tenant, using three-layer caching
-    pub async fn get(
-        &self,
-        tenant_id: &str,
-    ) -> Result<Option<Arc<SystemFunctions>>, CacheError> {
+    pub async fn get(&self, tenant_id: &str) -> Result<Option<Arc<SystemFunctions>>, CacheError> {
         self.inner.get(&tenant_id.to_owned()).await
     }
 

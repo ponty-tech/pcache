@@ -12,13 +12,13 @@
 //! - Generic key and value types
 //! - Backend-agnostic L3 fetching
 
-mod config;
-mod error;
-#[cfg(feature = "python")]
-mod python;
 pub mod client_cache;
 pub mod collection_cache;
+mod config;
+mod error;
 pub mod key_value_cache;
+#[cfg(feature = "python")]
+mod python;
 pub mod system_function_cache;
 pub mod tenant_cache;
 mod three_layer_cache;

@@ -10,8 +10,8 @@
 
 use crate::{CacheConfig, CacheError, DataFetcher, KeyFormatter, ThreeLayerCache};
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 /// Trait for fetching OAuth2 clients from the backend (L3).
