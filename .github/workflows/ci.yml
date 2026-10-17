@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # The Release workflow calls this workflow, so a tag is only built and
+  # published once these checks have passed for it.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,11 +20,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Rust Test
+  # Decides whether the change touches anything beyond documentation. The other
+  # jobs are skipped, not left out, for documentation-only changes: a skipped job
+  # counts as passed for required checks and for the deploy workflow's CI gate,
+  # whereas a workflow that never starts leaves both waiting.
+  changes:
+    runs-on: ubuntu-26.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes beyond documentation
+        id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          code=true
+          # Manual runs, new branches and rewritten history have no usable base: run everything.
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] && git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            # No grep -q: it exits at the first match and the SIGPIPE to git diff fails the
+            # pipeline under the runner's pipefail, which would skip the tests for code changes.
+            if ! git diff --name-only "$BASE" "$GITHUB_SHA" | grep -vE '(\.md$|^docs/|^LICENSE$)' > /dev/null; then
+              code=false
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -36,9 +70,56 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --features python -- -D warnings
 
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      # ruff and ty run at the versions locked in uv.lock. Neither imports
+      # pcache, so the extension module is not built here; --no-sync keeps uv run
+      # from building it anyway. ty takes the extension's types from
+      # python/pcache/__init__.pyi.
+      - name: Install Python lint tools
+        run: uv sync --frozen --no-install-project
+
+      - name: Ruff lint
+        run: uv run --no-sync ruff check .
+
+      - name: Ruff format
+        run: uv run --no-sync ruff format --check .
+
+      - name: ty
+        run: uv run --no-sync ty check
+
+  test:
+    name: Test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build wheel (x86_64 only)
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+          manylinux: auto
+
       # Default features only: the `python` feature enables PyO3's
       # `extension-module`, which leaves the Python symbols unresolved, so a
-      # test binary built with it cannot link. The wheels are built and
-      # checked by the Build workflow.
-      - name: Unit tests
+      # test binary built with it cannot link. The wheel built above covers the
+      # `python` feature.
+      - name: Rust tests
         run: cargo test
+
+      # There are no Python tests yet; importing the wheel at least proves the
+      # extension module links and loads.
+      - name: Import the wheel
+        run: |
+          pip install dist/*.whl
+          python -c "import pcache"

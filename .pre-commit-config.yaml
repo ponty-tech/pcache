@@ -1,0 +1,44 @@
+# prek hooks (pre-commit compatible). Install once per clone with `prek install`.
+repos:
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+        # Two trailing spaces are a Markdown line break.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+
+  # Same checks as CI (.github/workflows/ci.yml): the toolchain's rustfmt and clippy,
+  # and ruff and ty from uv.lock.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --features python -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: ty
+        name: ty
+        entry: uv run ty check
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
