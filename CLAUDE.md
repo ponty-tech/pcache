@@ -10,4 +10,4 @@ When releasing a new version, **all three steps** are required:
 2. Bump version in `pyproject.toml`
 3. Create a git tag matching the version (e.g., `git tag v0.3.4`)
 
-Both version files must stay in sync. The tag triggers the GitHub Actions workflow to build and publish to Google Artifact Registry.
+Both version files must stay in sync. The tag triggers `.github/workflows/release.yml`, which runs the CI checks (`ci.yml`) first, then builds the wheels and publishes them to Google Artifact Registry.

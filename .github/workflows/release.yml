@@ -1,22 +1,26 @@
-name: Build
+name: Release
 
 on:
   push:
     tags: ["v*"]
-  pull_request:
-    branches: [main]
+  # Builds the wheels without publishing them when run on a branch; publishing
+  # needs a v* tag.
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 env:
   ARTIFACT_REGISTRY_URL: https://europe-north1-python.pkg.dev/prs-next/ponty/
 
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build ${{ matrix.target }}
+    needs: ci
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -42,11 +46,11 @@ jobs:
         if: ${{ matrix.self-hosted }}
         run: sudo chown -R $USER:$USER ${{ github.workspace }} || true
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         if: ${{ !matrix.self-hosted }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -69,23 +73,23 @@ jobs:
           docker-options: ${{ matrix.self-hosted && '-e CARGO_BUILD_JOBS=2' || '' }}
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target }}
           path: dist/*.whl
 
   publish:
     name: Publish to Artifact Registry
-    runs-on: ubuntu-26.04
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - name: Download all wheels
-        uses: actions/download-artifact@v7
+      - name: Download wheels
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
@@ -100,7 +104,7 @@ jobs:
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 

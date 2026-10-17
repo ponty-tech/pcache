@@ -8,6 +8,36 @@ version = "0.6.0"
 description = "Three-layer caching library with Redis pub/sub invalidation"
 requires-python = ">=3.11"
 
+[dependency-groups]
+dev = [
+    "ruff>=0.17.1",
+    "ty>=0.0.89",
+]
+
+[tool.ruff]
+target-version = "py311"  # requires-python
+line-length = 120
+# The Python package lives in python/ (maturin python-source), so import sorting
+# must know pcache is first-party.
+src = [".", "python"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "T"]
+# Comparisons to None/True/False are SQLAlchemy column expressions, not mistakes.
+ignore = ["E711", "E712"]
+unfixable = ["E711"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.ty.analysis]
+# pcache.pcache is the compiled extension module; CI lints without building it.
+# Its types come from python/pcache/__init__.pyi, which re-exports everything.
+allowed-unresolved-imports = ["pcache.pcache"]
+
 [tool.maturin]
 features = ["python"]
 python-source = "python"
