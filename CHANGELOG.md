@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] - 2026-10-20
+
+### Fixed
+- Declare `ClientCache`, `ClientInfo` and `ClientBackendProtocol` in the Python type stubs. They were exported at runtime but missing from `__init__.pyi`, so type checkers reported `from pcache import ClientCache` as an unresolved import.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added
