@@ -72,7 +72,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --features python -- -D warnings
 
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.2
 
       # ruff and ty run at the versions locked in uv.lock. Neither imports
       # pcache, so the extension module is not built here; --no-sync keeps uv run
