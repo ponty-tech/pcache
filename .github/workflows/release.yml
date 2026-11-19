@@ -52,7 +52,7 @@ jobs:
         if: ${{ !matrix.self-hosted }}
         uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Cache Rust
         if: ${{ !matrix.self-hosted }}
@@ -106,7 +106,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install twine
         run: pip install twine

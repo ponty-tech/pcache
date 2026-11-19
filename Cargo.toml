@@ -38,7 +38,7 @@ optional = true
 # Python bindings (optional)
 [dependencies.pyo3]
 version = "0.29"
-features = ["extension-module", "abi3-py311"]
+features = ["extension-module", "abi3-py314"]
 optional = true
 
 [dependencies.pyo3-async-runtimes]
