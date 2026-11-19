@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "pcache"
 version = "0.6.1"
 description = "Three-layer caching library with Redis pub/sub invalidation"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 
 [dependency-groups]
 dev = [
@@ -15,7 +15,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py311"  # requires-python
+target-version = "py314"  # requires-python
 line-length = 120
 # The Python package lives in python/ (maturin python-source), so import sorting
 # must know pcache is first-party.
