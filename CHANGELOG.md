@@ -1,8 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0] - 2026-11-19
 
 ### Changed
+- Build the macOS wheel on macos-26, since the macos-14 runners are retired.
 - Require Python 3.14 or later. The wheel is built against the 3.14 stable ABI (`abi3-py314`), so it no longer installs on Python 3.11 to 3.13.
 
 ## [0.6.1] - 2026-10-20
