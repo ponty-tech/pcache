@@ -160,8 +160,11 @@ impl KeyFormatter<String> for TenantBySlugKeyFormatter {
 
 /// Unified tenant cache with dual-key lookup
 ///
-/// Supports lookup by both `tenant_id` and `slug`, with automatic
-/// cross-population of caches.
+/// Supports lookup by both `tenant_id` and `slug`. The two keys are separate
+/// caches: each has its own entries and its own invalidation channel, a lookup
+/// by one key does not fill the other, and invalidating one leaves the other
+/// in place. After a tenant changes, call [`TenantCache::invalidate`] with both
+/// the id and the slug.
 pub struct TenantCache<B: TenantBackend> {
     by_id: ThreeLayerCache<String, TenantInfo, (), TenantByIdFetcher<B>, TenantByIdKeyFormatter>,
     by_slug:
@@ -228,20 +231,25 @@ impl<B: TenantBackend> TenantCache<B> {
         }
     }
 
-    /// Invalidate tenant cache by ID
+    /// Invalidate the tenant's entry in the by-id cache only.
     ///
-    /// Note: This invalidates the by-id cache. The by-slug cache will be
-    /// invalidated via pub/sub if the payload includes the slug.
+    /// The entry under the tenant's slug is not touched and keeps serving the
+    /// old value until its TTL ends. Use [`TenantCache::invalidate`] when the
+    /// tenant has changed.
     pub async fn invalidate_by_id(&self, id: &str) -> Result<(), CacheError> {
         self.by_id.invalidate(&id.to_owned()).await
     }
 
-    /// Invalidate tenant cache by slug
+    /// Invalidate the tenant's entry in the by-slug cache only.
+    ///
+    /// The entry under the tenant's id is not touched. Use
+    /// [`TenantCache::invalidate`] when the tenant has changed.
     pub async fn invalidate_by_slug(&self, slug: &str) -> Result<(), CacheError> {
         self.by_slug.invalidate(&slug.to_owned()).await
     }
 
-    /// Invalidate tenant cache by both ID and slug
+    /// Invalidate the tenant's entries under both its id and its slug, in every
+    /// layer and on every instance.
     pub async fn invalidate(&self, id: &str, slug: &str) -> Result<(), CacheError> {
         self.by_id.invalidate(&id.to_owned()).await?;
         self.by_slug.invalidate(&slug.to_owned()).await

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The `TenantCache` documentation no longer says that the id and slug entries are cross-populated, or that `invalidate_by_id` also clears the slug entry through pub/sub. They are two separate caches with their own invalidation channels, so a changed tenant needs `invalidate(id, slug)`; `invalidate_by_id` alone left the slug entry serving the old value until its TTL ended.
+
 ## [0.7.0] - 2026-11-19
 
 ### Changed
