@@ -248,8 +248,12 @@ impl<B: TenantBackend> TenantCache<B> {
         self.by_slug.invalidate(&slug.to_owned()).await
     }
 
-    /// Invalidate the tenant's entries under both its id and its slug, in every
-    /// layer and on every instance.
+    /// Invalidate the tenant's entries under both its id and its slug.
+    ///
+    /// Each is removed from this instance's memory at once. Removing it from
+    /// Redis and telling the other instances (when pub/sub is enabled) is best
+    /// effort: a Redis error is logged and not returned, and the entry then
+    /// lives until its TTL ends.
     pub async fn invalidate(&self, id: &str, slug: &str) -> Result<(), CacheError> {
         self.by_id.invalidate(&id.to_owned()).await?;
         self.by_slug.invalidate(&slug.to_owned()).await
